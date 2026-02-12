@@ -1,7 +1,40 @@
 :root {
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-  color: #10151f;
-  background: #f3f5f8;
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --panel-soft: #fbfcff;
+  --text: #10151f;
+  --muted: #3f4a5f;
+  --border: #d8dee9;
+  --border-soft: #e0e5ef;
+  --input-border: #c8d0de;
+  --button-bg: #0f315f;
+  --button-hover: #184882;
+  --secondary-bg: #e9effa;
+  --secondary-text: #173153;
+  --danger-bg: #8a1f2f;
+  --danger-hover: #a72a3d;
+  --ok: #0f7a2b;
+  --error: #a12027;
+}
+
+body[data-theme="dark"] {
+  --bg: #131822;
+  --panel: #1b2330;
+  --panel-soft: #1f2938;
+  --text: #e6eefc;
+  --muted: #a7b6d1;
+  --border: #2b3a52;
+  --border-soft: #31405a;
+  --input-border: #3a4c6b;
+  --button-bg: #2f6ab5;
+  --button-hover: #4683d2;
+  --secondary-bg: #2a3447;
+  --secondary-text: #d3e4ff;
+  --danger-bg: #a43847;
+  --danger-hover: #bf4b5b;
+  --ok: #58d17b;
+  --error: #ff7d8a;
 }
 
 * {
@@ -11,6 +44,8 @@
 body {
   margin: 0;
   padding: 0;
+  background: var(--bg);
+  color: var(--text);
 }
 
 .app {
@@ -21,34 +56,64 @@ body {
   gap: 16px;
 }
 
+.pageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
 header h1 {
   margin: 0;
 }
 
 header p {
   margin: 6px 0 0;
-  color: #3c4658;
+  color: var(--muted);
 }
 
 .panel {
-  background: #ffffff;
-  border: 1px solid #d8dee9;
+  background: var(--panel);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px;
   display: grid;
   gap: 10px;
 }
 
-.columns {
+.innerPanel {
+  background: var(--panel-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 10px;
   display: grid;
-  gap: 16px;
-  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.panelHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.panelHeader h2,
+.panelHeader h3 {
+  margin: 0;
+}
+
+.panelHeader .row {
+  width: auto;
 }
 
 .row {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
 }
 
 .status {
@@ -58,12 +123,12 @@ header p {
 }
 
 .ok {
-  color: #0f7a2b;
+  color: var(--ok);
   font-weight: 700;
 }
 
 .error {
-  color: #a12027;
+  color: var(--error);
   font-weight: 700;
 }
 
@@ -85,28 +150,36 @@ header p {
 }
 
 .fnCard {
-  border: 1px solid #e0e5ef;
+  border: 1px solid var(--border-soft);
   border-radius: 10px;
   padding: 10px;
   display: grid;
   gap: 8px;
-  background: #fbfcff;
+  background: var(--panel-soft);
 }
 
-.fnCard h3 {
+.tupleEditor {
+  display: grid;
+  gap: 8px;
+  border: 1px dashed var(--border-soft);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.fnCard h4 {
   margin: 0;
   font-size: 14px;
   word-break: break-all;
 }
 
 .mutability {
-  color: #3f4a5f;
+  color: var(--muted);
   font-size: 13px;
 }
 
 label {
   font-size: 13px;
-  color: #2e3645;
+  color: var(--text);
 }
 
 input,
@@ -121,9 +194,10 @@ textarea,
 select {
   width: 100%;
   border-radius: 8px;
-  border: 1px solid #c8d0de;
+  border: 1px solid var(--input-border);
   padding: 8px;
-  background: #ffffff;
+  background: var(--panel);
+  color: var(--text);
 }
 
 textarea {
@@ -134,21 +208,44 @@ textarea {
 button {
   border: none;
   border-radius: 8px;
-  background: #0f315f;
+  background: var(--button-bg);
   color: #ffffff;
   padding: 8px 12px;
   cursor: pointer;
 }
 
 button:hover {
-  background: #184882;
+  background: var(--button-hover);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.secondaryButton {
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+}
+
+.secondaryButton:hover {
+  filter: brightness(1.08);
+}
+
+.dangerButton {
+  background: var(--danger-bg);
+  width: max-content;
+}
+
+.dangerButton:hover {
+  background: var(--danger-hover);
 }
 
 pre {
   margin: 0;
-  border: 1px solid #d7ddeb;
+  border: 1px solid var(--border-soft);
   border-radius: 8px;
-  background: #f7f9fd;
+  background: var(--panel-soft);
   padding: 8px;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -160,8 +257,30 @@ pre {
   gap: 8px;
 }
 
-@media (max-width: 980px) {
-  .columns {
-    grid-template-columns: 1fr;
+.addressLine {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+code {
+  background: var(--panel-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 2px 6px;
+  word-break: break-all;
+}
+
+@media (max-width: 900px) {
+  .pageHeader,
+  .panelHeader {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
