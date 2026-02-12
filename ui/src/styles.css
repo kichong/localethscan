@@ -1,0 +1,167 @@
+:root {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: #10151f;
+  background: #f3f5f8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}
+
+.app {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+
+header h1 {
+  margin: 0;
+}
+
+header p {
+  margin: 6px 0 0;
+  color: #3c4658;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #d8dee9;
+  border-radius: 10px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.columns {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.status {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.ok {
+  color: #0f7a2b;
+  font-weight: 700;
+}
+
+.error {
+  color: #a12027;
+  font-weight: 700;
+}
+
+.okBox {
+  border: 1px solid #b6e3c4;
+  background: #ebfff2;
+  color: #104d1f;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.errorBox {
+  border: 1px solid #f5c2c2;
+  background: #fff0f0;
+  color: #6f1820;
+  border-radius: 8px;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
+.fnCard {
+  border: 1px solid #e0e5ef;
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  background: #fbfcff;
+}
+
+.fnCard h3 {
+  margin: 0;
+  font-size: 14px;
+  word-break: break-all;
+}
+
+.mutability {
+  color: #3f4a5f;
+  font-size: 13px;
+}
+
+label {
+  font-size: 13px;
+  color: #2e3645;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid #c8d0de;
+  padding: 8px;
+  background: #ffffff;
+}
+
+textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+
+button {
+  border: none;
+  border-radius: 8px;
+  background: #0f315f;
+  color: #ffffff;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #184882;
+}
+
+pre {
+  margin: 0;
+  border: 1px solid #d7ddeb;
+  border-radius: 8px;
+  background: #f7f9fd;
+  padding: 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.txBox {
+  display: grid;
+  gap: 8px;
+}
+
+@media (max-width: 980px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
