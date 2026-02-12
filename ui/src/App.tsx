@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  createWalletClient,
+  custom,
   createPublicClient,
   decodeEventLog,
   encodeFunctionData,
@@ -26,6 +28,7 @@ type ContractUI = {
   writeResults: Record<string, WriteResult>;
   rawTopics: string;
   rawData: string;
+  rawTxHash: string;
   rawDecoded: string;
 };
 
@@ -186,6 +189,7 @@ function emptyUI(): ContractUI {
     writeResults: {},
     rawTopics: "",
     rawData: "0x",
+    rawTxHash: "",
     rawDecoded: ""
   };
 }
@@ -254,6 +258,10 @@ export default function App() {
   const [chainStatus, setChainStatus] = useState<ChainStatus>({ connected: false });
   const [accounts, setAccounts] = useState<string[]>([]);
   const [senderBalances, setSenderBalances] = useState<Record<string, string>>({});
+  const [writeMode, setWriteMode] = useState<"local" | "wallet">("local");
+  const [walletAccount, setWalletAccount] = useState("");
+  const [walletBalance, setWalletBalance] = useState("");
+  const [walletError, setWalletError] = useState("");
   const [fromAddress, setFromAddress] = useState("");
   const [copiedAddress, setCopiedAddress] = useState("");
   const [contracts, setContracts] = useState<ContractEntry[]>(initial.contracts);
@@ -323,6 +331,22 @@ export default function App() {
     const id = window.setInterval(() => void checkChain(), 5000);
     return () => window.clearInterval(id);
   }, [client]);
+
+  useEffect(() => {
+    const loadWalletBalance = async () => {
+      if (!walletAccount) {
+        setWalletBalance("");
+        return;
+      }
+      try {
+        const wei = await client.getBalance({ address: walletAccount as Address });
+        setWalletBalance(formatEthBalance(wei));
+      } catch {
+        setWalletBalance("");
+      }
+    };
+    void loadWalletBalance();
+  }, [walletAccount, client]);
 
   const clearManagerStatus = () => {
     setManagerError("");
@@ -430,6 +454,48 @@ export default function App() {
     return (fn.inputs ?? []).map((input, i) => parseArgFromText(input, values[i] ?? ""));
   };
 
+  const connectWallet = async () => {
+    setWalletError("");
+    try {
+      if (typeof window === "undefined" || !(window as any).ethereum) {
+        throw new Error("No injected wallet found. Install/use MetaMask or compatible wallet.");
+      }
+      const walletClient = createWalletClient({
+        transport: custom((window as any).ethereum)
+      });
+      const addresses = await walletClient.requestAddresses();
+      if (!addresses.length) throw new Error("Wallet did not return an address.");
+      setWalletAccount(normalizeAddress(addresses[0]));
+      setWriteMode("wallet");
+    } catch (error) {
+      setWalletError(error instanceof Error ? error.message : "Wallet connection failed.");
+    }
+  };
+
+  const exportWorkspace = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      rpcUrl,
+      contracts: contracts.map((contract) => ({
+        name: contract.name,
+        address: contract.address,
+        abi: contract.abi
+      }))
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json"
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    a.href = url;
+    a.download = `localethscan-workspace-${timestamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const runRead = async (contract: ContractEntry, fn: AbiFunction) => {
     const signature = getFunctionSignature(fn);
     setContractState(contract.id, (prev) => ({ ...prev, readResults: { ...prev.readResults, [signature]: { loading: true } } }));
@@ -450,17 +516,50 @@ export default function App() {
     const signature = getFunctionSignature(fn);
     setContractState(contract.id, (prev) => ({ ...prev, writeResults: { ...prev.writeResults, [signature]: { loading: true } } }));
     try {
-      if (!fromAddress) throw new Error("No unlocked sender account selected.");
+      const txData = encodeFunctionData({
+        abi: contract.abi,
+        functionName: fn.name,
+        args: getArgs(contract, fn)
+      });
       const txParams: Record<string, unknown> = {
-        from: fromAddress as Address,
         to: contract.address as Address,
-        data: encodeFunctionData({ abi: contract.abi, functionName: fn.name, args: getArgs(contract, fn) })
+        data: txData
       };
       if (fn.stateMutability === "payable") {
         const wei = (getContractState(contract.id).payableValueWei[signature] ?? "").trim();
         if (wei) txParams.value = toHex(BigInt(wei));
       }
-      const txHash = (await client.request({ method: "eth_sendTransaction", params: [txParams] })) as Hex;
+      let txHash: Hex;
+      if (writeMode === "wallet") {
+        if (typeof window === "undefined" || !(window as any).ethereum) {
+          throw new Error("No injected wallet found.");
+        }
+        const walletClient = createWalletClient({
+          transport: custom((window as any).ethereum)
+        });
+        const addresses = await walletClient.requestAddresses();
+        const selected = normalizeAddress(walletAccount || addresses[0] || "");
+        if (!selected) throw new Error("No wallet account available.");
+        setWalletAccount(selected);
+        txHash = (await walletClient.request({
+          method: "eth_sendTransaction",
+          params: [
+            {
+              from: selected as Address,
+              to: contract.address as Address,
+              data: txData,
+              ...(txParams.value ? { value: txParams.value as string } : {})
+            }
+          ]
+        })) as Hex;
+      } else {
+        if (!fromAddress) throw new Error("No unlocked sender account selected.");
+        txParams.from = fromAddress as Address;
+        txHash = (await client.request({
+          method: "eth_sendTransaction",
+          params: [txParams]
+        })) as Hex;
+      }
       const receipt = await client.waitForTransactionReceipt({ hash: txHash });
       const decodedLogs = receipt.logs.map((log, index) => {
         try {
@@ -483,6 +582,57 @@ export default function App() {
       }));
     } catch (error) {
       setContractState(contract.id, (prev) => ({ ...prev, writeResults: { ...prev.writeResults, [signature]: { error: error instanceof Error ? error.message : "Write failed." } } }));
+    }
+  };
+
+  const decodeRawLogFromTxHash = async (contract: ContractEntry) => {
+    try {
+      const state = getContractState(contract.id);
+      const txHash = state.rawTxHash.trim() as Hex;
+      if (!txHash || !txHash.startsWith("0x")) {
+        throw new Error("Enter a valid transaction hash.");
+      }
+      const receipt = await client.getTransactionReceipt({ hash: txHash });
+      const decodedLogs = receipt.logs.map((log, index) => {
+        try {
+          const decoded = decodeEventLog({
+            abi: contract.abi,
+            topics: log.topics as any,
+            data: log.data,
+            strict: false
+          });
+          return {
+            index,
+            logAddress: normalizeAddress(log.address),
+            eventName: decoded.eventName,
+            args: normalizeValue(decoded.args)
+          };
+        } catch {
+          return {
+            index,
+            logAddress: normalizeAddress(log.address),
+            eventName: null,
+            topics: log.topics,
+            data: log.data
+          };
+        }
+      });
+      setContractState(contract.id, (prev) => ({
+        ...prev,
+        rawDecoded: toPrintable({
+          txHash,
+          status: receipt.status,
+          blockNumber: receipt.blockNumber.toString(),
+          logs: decodedLogs
+        })
+      }));
+    } catch (error) {
+      setContractState(contract.id, (prev) => ({
+        ...prev,
+        rawDecoded: `Decode from tx hash failed: ${
+          error instanceof Error ? error.message : "Unknown error."
+        }`
+      }));
     }
   };
 
@@ -513,9 +663,14 @@ export default function App() {
           <h1>localethscan MVP</h1>
           <p>Local-only contract read/write + log decode helper for Anvil-style RPCs.</p>
         </div>
-        <button className="secondaryButton" onClick={() => setDarkMode((prev) => !prev)}>
-          {darkMode ? "Light mode" : "Dark mode"}
-        </button>
+        <div className="row wrap">
+          <button className="secondaryButton" onClick={exportWorkspace}>
+            Export Workspace JSON
+          </button>
+          <button className="secondaryButton" onClick={() => setDarkMode((prev) => !prev)}>
+            {darkMode ? "Light mode" : "Dark mode"}
+          </button>
+        </div>
       </header>
 
       <section className="panel">
@@ -600,6 +755,46 @@ export default function App() {
               <span className="hint">
                 Selected balance: {fromAddress ? `${senderBalances[fromAddress] ?? "..."} ETH` : "-"}
               </span>
+            </div>
+
+            <div className="innerPanel">
+              <div className="panelHeader">
+                <h3>Live Chain Writes (Experimental)</h3>
+              </div>
+              <label>Write mode</label>
+              <select
+                value={writeMode}
+                onChange={(e) => setWriteMode(e.target.value as "local" | "wallet")}
+              >
+                <option value="local">Local unlocked accounts (primary)</option>
+                <option value="wallet">Wallet (secondary / experimental)</option>
+              </select>
+              {writeMode === "wallet" ? (
+                <>
+                  <div className="row wrap">
+                    <button className="secondaryButton" onClick={() => void connectWallet()}>
+                      {walletAccount ? "Reconnect wallet" : "Connect wallet"}
+                    </button>
+                    <button
+                      className="secondaryButton"
+                      onClick={() => void copyAddress(walletAccount)}
+                      disabled={!walletAccount}
+                    >
+                      {copiedAddress === walletAccount && walletAccount
+                        ? "Copied"
+                        : "Copy wallet address"}
+                    </button>
+                  </div>
+                  <span className="hint">
+                    Wallet: {walletAccount || "Not connected"}
+                  </span>
+                  <span className="hint">
+                    Wallet balance (via current RPC):{" "}
+                    {walletAccount ? `${walletBalance || "..."} ETH` : "-"}
+                  </span>
+                  {walletError ? <div className="errorBox">{walletError}</div> : null}
+                </>
+              ) : null}
             </div>
           </>
         ) : null}
@@ -782,7 +977,26 @@ export default function App() {
                       <textarea value={state.rawTopics} onChange={(e) => setContractState(contract.id, (prev) => ({ ...prev, rawTopics: e.target.value }))} placeholder='["0xddf252ad...", "0x000..."]' />
                       <label>Data</label>
                       <input value={state.rawData} onChange={(e) => setContractState(contract.id, (prev) => ({ ...prev, rawData: e.target.value }))} placeholder="0x..." />
-                      <button onClick={() => decodeRawLog(contract)}>Decode</button>
+                      <div className="row wrap">
+                        <button onClick={() => decodeRawLog(contract)}>Decode topics+data</button>
+                      </div>
+                      <label>Or decode from transaction hash</label>
+                      <input
+                        value={state.rawTxHash}
+                        onChange={(e) =>
+                          setContractState(contract.id, (prev) => ({
+                            ...prev,
+                            rawTxHash: e.target.value
+                          }))
+                        }
+                        placeholder="0x transaction hash"
+                      />
+                      <button
+                        className="secondaryButton"
+                        onClick={() => void decodeRawLogFromTxHash(contract)}
+                      >
+                        Decode from tx hash
+                      </button>
                       {state.rawDecoded ? <pre>{state.rawDecoded}</pre> : null}
                     </>
                   ) : null}

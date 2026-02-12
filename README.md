@@ -18,6 +18,7 @@ MVP is complete and working.
 - Add and manage contracts:
   - add single contract (name + address + ABI)
   - bulk import multiple contracts from JSON files
+  - export full workspace to JSON (re-importable)
   - rename/remove contracts
 - Generate ABI-driven Read/Write forms.
 - Execute reads with decoded output (`BigInt` safe).
@@ -25,11 +26,15 @@ MVP is complete and working.
   - tx hash
   - receipt summary
   - decoded emitted logs (from loaded ABI)
-- Decode raw logs with topics + data.
+- Decode logs with:
+  - raw topics + data
+  - transaction hash (fetch receipt and decode logs)
 - Write sender UX:
   - dropdown of `eth_accounts`
   - one-click copy of selected sender
   - ETH balance shown for each sender option and selected sender
+- Secondary write path:
+  - optional wallet mode for live-chain style writes (experimental)
 - Section collapse/expand.
 - Dark mode toggle.
 - Local persistence for RPC, contracts, and UI preferences.
@@ -92,8 +97,16 @@ Each selected JSON file can be one of:
 ]
 ```
 
+## Workspace Export JSON
+
+Use `Export Workspace JSON` in the header to download your current workspace.
+
+That file includes your loaded contracts (`name`, `address`, `abi`) and can be uploaded later through `Bulk import contracts JSON files` to restore the contract set.
+
+So yes, your understanding is correct.
+
 ## Notes
 
 - Best experience today is local RPCs that expose unlocked accounts (Anvil default).
-- Public RPC endpoints usually do not allow `eth_sendTransaction` from arbitrary accounts; wallet integration is the next step for that.
+- Public RPC endpoints usually do not allow `eth_sendTransaction` from arbitrary accounts. Use the experimental wallet mode for these environments.
 - Solidity/Foundry files remain in this repo for contract development, but this README is centered on the UI workflow.
