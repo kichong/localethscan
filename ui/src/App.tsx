@@ -296,8 +296,27 @@ export default function App() {
     setContractStates((prev) => ({ ...prev, [id]: updater(prev[id] ?? emptyUI()) }));
   };
   const getContractState = (id: string): ContractUI => contractStates[id] ?? emptyUI();
-  const isCollapsed = (key: string) => Boolean(collapsed[key]);
-  const toggleCollapsed = (key: string) => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  const isCollapsed = (key: string, defaultCollapsed = false) =>
+    key in collapsed ? Boolean(collapsed[key]) : defaultCollapsed;
+  const toggleCollapsed = (key: string, defaultCollapsed = false) =>
+    setCollapsed((prev) => {
+      const current = key in prev ? Boolean(prev[key]) : defaultCollapsed;
+      return { ...prev, [key]: !current };
+    });
+  const setFunctionGroupCollapsed = (
+    contractId: string,
+    section: "read" | "write",
+    functions: AbiFunction[],
+    value: boolean
+  ) =>
+    setCollapsed((prev) => {
+      const next = { ...prev };
+      const baseKey = `c:${contractId}:${section}`;
+      for (const fn of functions) {
+        next[`${baseKey}:${getFunctionSignature(fn)}`] = value;
+      }
+      return next;
+    });
 
   const checkChain = async () => {
     try {
@@ -411,6 +430,14 @@ export default function App() {
     setContractStates((prev) => {
       const next = { ...prev };
       delete next[id];
+      return next;
+    });
+    setCollapsed((prev) => {
+      const next = { ...prev };
+      const prefix = `c:${id}`;
+      for (const key of Object.keys(next)) {
+        if (key === prefix || key.startsWith(`${prefix}:`)) delete next[key];
+      }
       return next;
     });
   };
@@ -676,7 +703,14 @@ export default function App() {
       <section className="panel">
         <div className="panelHeader">
           <h2>RPC</h2>
-          <button className="secondaryButton" onClick={() => toggleCollapsed("rpc")}>{isCollapsed("rpc") ? "Expand" : "Collapse"}</button>
+          <button
+            className="secondaryButton"
+            onClick={() => toggleCollapsed("rpc")}
+            aria-label={isCollapsed("rpc") ? "Expand RPC panel" : "Collapse RPC panel"}
+            title={isCollapsed("rpc") ? "Expand RPC panel" : "Collapse RPC panel"}
+          >
+            {isCollapsed("rpc") ? "+" : "-"}
+          </button>
         </div>
         {!isCollapsed("rpc") ? (
           <>
@@ -705,7 +739,14 @@ export default function App() {
       <section className="panel">
         <div className="panelHeader">
           <h2>Contract Manager</h2>
-          <button className="secondaryButton" onClick={() => toggleCollapsed("manager")}>{isCollapsed("manager") ? "Expand" : "Collapse"}</button>
+          <button
+            className="secondaryButton"
+            onClick={() => toggleCollapsed("manager")}
+            aria-label={isCollapsed("manager") ? "Expand contract manager" : "Collapse contract manager"}
+            title={isCollapsed("manager") ? "Expand contract manager" : "Collapse contract manager"}
+          >
+            {isCollapsed("manager") ? "+" : "-"}
+          </button>
         </div>
         {!isCollapsed("manager") ? (
           <>
@@ -731,7 +772,14 @@ export default function App() {
       <section className="panel">
         <div className="panelHeader">
           <h2>Write Sender</h2>
-          <button className="secondaryButton" onClick={() => toggleCollapsed("sender")}>{isCollapsed("sender") ? "Expand" : "Collapse"}</button>
+          <button
+            className="secondaryButton"
+            onClick={() => toggleCollapsed("sender")}
+            aria-label={isCollapsed("sender") ? "Expand write sender" : "Collapse write sender"}
+            title={isCollapsed("sender") ? "Expand write sender" : "Collapse write sender"}
+          >
+            {isCollapsed("sender") ? "+" : "-"}
+          </button>
         </div>
         {!isCollapsed("sender") ? (
           <>
@@ -811,6 +859,14 @@ export default function App() {
         const rKey = `${cKey}:read`;
         const wKey = `${cKey}:write`;
         const dKey = `${cKey}:decode`;
+        const openReadCount = reads.reduce(
+          (count, fn) => count + (isCollapsed(`${rKey}:${getFunctionSignature(fn)}`, true) ? 0 : 1),
+          0
+        );
+        const openWriteCount = writes.reduce(
+          (count, fn) => count + (isCollapsed(`${wKey}:${getFunctionSignature(fn)}`, true) ? 0 : 1),
+          0
+        );
 
         return (
           <section className="panel" key={contract.id}>
@@ -818,7 +874,14 @@ export default function App() {
               <h2>{contract.name}</h2>
               <div className="row">
                 <button className="secondaryButton" onClick={() => void copyAddress(contract.address)}>Copy Address</button>
-                <button className="secondaryButton" onClick={() => toggleCollapsed(cKey)}>{isCollapsed(cKey) ? "Expand" : "Collapse"}</button>
+                <button
+                  className="secondaryButton"
+                  onClick={() => toggleCollapsed(cKey)}
+                  aria-label={isCollapsed(cKey) ? "Expand contract panel" : "Collapse contract panel"}
+                  title={isCollapsed(cKey) ? "Expand contract panel" : "Collapse contract panel"}
+                >
+                  {isCollapsed(cKey) ? "+" : "-"}
+                </button>
               </div>
             </div>
 
@@ -832,31 +895,82 @@ export default function App() {
 
                 <section className="innerPanel">
                   <div className="panelHeader">
-                    <h3>Read Functions</h3>
-                    <button className="secondaryButton" onClick={() => toggleCollapsed(rKey)}>{isCollapsed(rKey) ? "Expand" : "Collapse"}</button>
+                    <h3>Read Functions ({openReadCount}/{reads.length} open)</h3>
+                    <div className="row wrap">
+                      <button
+                        className="secondaryButton allToggleButton"
+                        onClick={() => setFunctionGroupCollapsed(contract.id, "read", reads, false)}
+                        disabled={reads.length === 0}
+                        aria-label="Expand all read functions"
+                        title="Expand all read functions"
+                      >
+                        + all
+                      </button>
+                      <button
+                        className="secondaryButton allToggleButton"
+                        onClick={() => setFunctionGroupCollapsed(contract.id, "read", reads, true)}
+                        disabled={reads.length === 0}
+                        aria-label="Collapse all read functions"
+                        title="Collapse all read functions"
+                      >
+                        - all
+                      </button>
+                      <button
+                        className="secondaryButton"
+                        onClick={() => toggleCollapsed(rKey)}
+                        aria-label={isCollapsed(rKey) ? "Expand read function list" : "Collapse read function list"}
+                        title={isCollapsed(rKey) ? "Expand read function list" : "Collapse read function list"}
+                      >
+                        {isCollapsed(rKey) ? "+" : "-"}
+                      </button>
+                    </div>
                   </div>
                   {!isCollapsed(rKey) ? (
                     <>
                       {reads.length === 0 ? <p>No view/pure functions found.</p> : null}
                       {reads.map((fn) => {
                         const sig = getFunctionSignature(fn);
+                        const fnKey = `${rKey}:${sig}`;
+                        const fnCollapsed = isCollapsed(fnKey, true);
                         const result = state.readResults[sig];
                         return (
                           <article className="fnCard" key={sig}>
-                            <h4>{sig}</h4>
-                            {(fn.inputs ?? []).map((input, index) => (
-                              <div key={`${sig}-r-${index}`}>
-                                <label>{input.name || `arg${index}`} ({input.type})</label>
-                                <input
-                                  value={state.fnInputs[sig]?.[index] ?? ""}
-                                  onChange={(e) => updateFunctionInput(contract.id, sig, index, e.target.value)}
-                                  placeholder={input.type.endsWith("[]") || input.type.startsWith("tuple") ? "JSON value" : "value"}
-                                />
-                              </div>
-                            ))}
-                            <button onClick={() => void runRead(contract, fn)}>{result?.loading ? "Running..." : "Read"}</button>
-                            {result?.output ? <pre>{result.output}</pre> : null}
-                            {result?.error ? <div className="errorBox">{result.error}</div> : null}
+                            <div className="fnHeader">
+                              <button
+                                type="button"
+                                className="iconToggle"
+                                onClick={() => toggleCollapsed(fnKey, true)}
+                                aria-label={fnCollapsed ? `Expand ${sig}` : `Collapse ${sig}`}
+                                title={fnCollapsed ? "Expand function" : "Collapse function"}
+                              >
+                                {fnCollapsed ? "+" : "-"}
+                              </button>
+                              <h4>{sig}</h4>
+                            </div>
+                            {!fnCollapsed ? (
+                              <>
+                                {(fn.inputs ?? []).map((input, index) => (
+                                  <div key={`${sig}-r-${index}`}>
+                                    <label>{input.name || `arg${index}`} ({input.type})</label>
+                                    <input
+                                      value={state.fnInputs[sig]?.[index] ?? ""}
+                                      onChange={(e) => updateFunctionInput(contract.id, sig, index, e.target.value)}
+                                      placeholder={input.type.endsWith("[]") || input.type.startsWith("tuple") ? "JSON value" : "value"}
+                                    />
+                                  </div>
+                                ))}
+                                <button onClick={() => void runRead(contract, fn)}>
+                                  {result?.loading ? "Running..." : "Read"}
+                                </button>
+                                {result?.output ? <pre>{result.output}</pre> : null}
+                                {result?.error ? <div className="errorBox">{result.error}</div> : null}
+                              </>
+                            ) : (
+                              <>
+                                {result?.error ? <div className="errorBox">Last run failed.</div> : null}
+                                {result?.output ? <div className="hint">Last read output available.</div> : null}
+                              </>
+                            )}
                           </article>
                         );
                       })}
@@ -866,99 +980,148 @@ export default function App() {
 
                 <section className="innerPanel">
                   <div className="panelHeader">
-                    <h3>Write Functions</h3>
-                    <button className="secondaryButton" onClick={() => toggleCollapsed(wKey)}>{isCollapsed(wKey) ? "Expand" : "Collapse"}</button>
+                    <h3>Write Functions ({openWriteCount}/{writes.length} open)</h3>
+                    <div className="row wrap">
+                      <button
+                        className="secondaryButton allToggleButton"
+                        onClick={() => setFunctionGroupCollapsed(contract.id, "write", writes, false)}
+                        disabled={writes.length === 0}
+                        aria-label="Expand all write functions"
+                        title="Expand all write functions"
+                      >
+                        + all
+                      </button>
+                      <button
+                        className="secondaryButton allToggleButton"
+                        onClick={() => setFunctionGroupCollapsed(contract.id, "write", writes, true)}
+                        disabled={writes.length === 0}
+                        aria-label="Collapse all write functions"
+                        title="Collapse all write functions"
+                      >
+                        - all
+                      </button>
+                      <button
+                        className="secondaryButton"
+                        onClick={() => toggleCollapsed(wKey)}
+                        aria-label={isCollapsed(wKey) ? "Expand write function list" : "Collapse write function list"}
+                        title={isCollapsed(wKey) ? "Expand write function list" : "Collapse write function list"}
+                      >
+                        {isCollapsed(wKey) ? "+" : "-"}
+                      </button>
+                    </div>
                   </div>
                   {!isCollapsed(wKey) ? (
                     <>
                       {writes.length === 0 ? <p>No state-changing functions found.</p> : null}
                       {writes.map((fn) => {
                         const sig = getFunctionSignature(fn);
+                        const fnKey = `${wKey}:${sig}`;
+                        const fnCollapsed = isCollapsed(fnKey, true);
                         const result = state.writeResults[sig];
                         return (
                           <article className="fnCard" key={sig}>
-                            <h4>{sig}</h4>
-                            <div className="mutability">stateMutability: <strong>{fn.stateMutability}</strong></div>
-                            {(fn.inputs ?? []).map((input, index) => (
-                              <div key={`${sig}-w-${index}`}>
-                                <label>{input.name || `arg${index}`} ({input.type})</label>
-                                {isExpandableTuple(input) ? (
-                                  <div className="tupleEditor">
-                                    {collectTupleFields(
-                                      input,
-                                      input.name || `arg${index}`
-                                    ).map((field) => (
-                                      <div key={`${sig}-tuple-${index}-${field.pathText}`}>
-                                        <label>
-                                          {field.label} ({field.param.type})
-                                        </label>
-                                        <input
-                                          value={
-                                            state.tupleDrafts[sig]?.[
-                                              `${index}:${field.pathText}`
-                                            ] ?? ""
-                                          }
-                                          onChange={(e) =>
-                                            updateTupleDraftInput(
-                                              contract.id,
-                                              sig,
-                                              index,
-                                              input,
-                                              field.pathText,
-                                              e.target.value
-                                            )
-                                          }
-                                          placeholder={
-                                            field.param.type.endsWith("[]")
-                                              ? "JSON array"
-                                              : "value"
-                                          }
-                                        />
+                            <div className="fnHeader">
+                              <button
+                                type="button"
+                                className="iconToggle"
+                                onClick={() => toggleCollapsed(fnKey, true)}
+                                aria-label={fnCollapsed ? `Expand ${sig}` : `Collapse ${sig}`}
+                                title={fnCollapsed ? "Expand function" : "Collapse function"}
+                              >
+                                {fnCollapsed ? "+" : "-"}
+                              </button>
+                              <h4>{sig}</h4>
+                            </div>
+                            {!fnCollapsed ? (
+                              <>
+                                <div className="mutability">stateMutability: <strong>{fn.stateMutability}</strong></div>
+                                {(fn.inputs ?? []).map((input, index) => (
+                                  <div key={`${sig}-w-${index}`}>
+                                    <label>{input.name || `arg${index}`} ({input.type})</label>
+                                    {isExpandableTuple(input) ? (
+                                      <div className="tupleEditor">
+                                        {collectTupleFields(
+                                          input,
+                                          input.name || `arg${index}`
+                                        ).map((field) => (
+                                          <div key={`${sig}-tuple-${index}-${field.pathText}`}>
+                                            <label>
+                                              {field.label} ({field.param.type})
+                                            </label>
+                                            <input
+                                              value={
+                                                state.tupleDrafts[sig]?.[
+                                                  `${index}:${field.pathText}`
+                                                ] ?? ""
+                                              }
+                                              onChange={(e) =>
+                                                updateTupleDraftInput(
+                                                  contract.id,
+                                                  sig,
+                                                  index,
+                                                  input,
+                                                  field.pathText,
+                                                  e.target.value
+                                                )
+                                              }
+                                              placeholder={
+                                                field.param.type.endsWith("[]")
+                                                  ? "JSON array"
+                                                  : "value"
+                                              }
+                                            />
+                                          </div>
+                                        ))}
                                       </div>
-                                    ))}
+                                    ) : (
+                                      <input
+                                        value={state.fnInputs[sig]?.[index] ?? ""}
+                                        onChange={(e) =>
+                                          updateFunctionInput(
+                                            contract.id,
+                                            sig,
+                                            index,
+                                            e.target.value
+                                          )
+                                        }
+                                        placeholder={
+                                          input.type.endsWith("[]") ||
+                                          input.type.startsWith("tuple")
+                                            ? "JSON value"
+                                            : "value"
+                                        }
+                                      />
+                                    )}
                                   </div>
-                                ) : (
-                                  <input
-                                    value={state.fnInputs[sig]?.[index] ?? ""}
-                                    onChange={(e) =>
-                                      updateFunctionInput(
-                                        contract.id,
-                                        sig,
-                                        index,
-                                        e.target.value
-                                      )
-                                    }
-                                    placeholder={
-                                      input.type.endsWith("[]") ||
-                                      input.type.startsWith("tuple")
-                                        ? "JSON value"
-                                        : "value"
-                                    }
-                                  />
-                                )}
-                              </div>
-                            ))}
-                            {fn.stateMutability === "payable" ? (
-                              <div>
-                                <label>Value (wei)</label>
-                                <input
-                                  value={state.payableValueWei[sig] ?? ""}
-                                  onChange={(e) => setContractState(contract.id, (prev) => ({ ...prev, payableValueWei: { ...prev.payableValueWei, [sig]: e.target.value } }))}
-                                  placeholder="0"
-                                />
-                              </div>
-                            ) : null}
-                            <button onClick={() => void runWrite(contract, fn)}>{result?.loading ? "Sending..." : "Write"}</button>
-                            {result?.txHash ? (
-                              <div className="txBox">
-                                <div className="addressLine"><span>tx hash:</span> <code>{result.txHash}</code></div>
-                                <label>Receipt Summary</label>
-                                <pre>{result.receiptSummary}</pre>
-                                <label>Decoded Logs</label>
-                                <pre>{result.decodedLogs}</pre>
-                              </div>
-                            ) : null}
-                            {result?.error ? <div className="errorBox">{result.error}</div> : null}
+                                ))}
+                                {fn.stateMutability === "payable" ? (
+                                  <div>
+                                    <label>Value (wei)</label>
+                                    <input
+                                      value={state.payableValueWei[sig] ?? ""}
+                                      onChange={(e) => setContractState(contract.id, (prev) => ({ ...prev, payableValueWei: { ...prev.payableValueWei, [sig]: e.target.value } }))}
+                                      placeholder="0"
+                                    />
+                                  </div>
+                                ) : null}
+                                <button onClick={() => void runWrite(contract, fn)}>{result?.loading ? "Sending..." : "Write"}</button>
+                                {result?.txHash ? (
+                                  <div className="txBox">
+                                    <div className="addressLine"><span>tx hash:</span> <code>{result.txHash}</code></div>
+                                    <label>Receipt Summary</label>
+                                    <pre>{result.receiptSummary}</pre>
+                                    <label>Decoded Logs</label>
+                                    <pre>{result.decodedLogs}</pre>
+                                  </div>
+                                ) : null}
+                                {result?.error ? <div className="errorBox">{result.error}</div> : null}
+                              </>
+                            ) : (
+                              <>
+                                {result?.error ? <div className="errorBox">Last write failed.</div> : null}
+                                {result?.txHash ? <div className="hint">Last tx hash saved.</div> : null}
+                              </>
+                            )}
                           </article>
                         );
                       })}
@@ -969,7 +1132,14 @@ export default function App() {
                 <section className="innerPanel">
                   <div className="panelHeader">
                     <h3>Decode Raw Log</h3>
-                    <button className="secondaryButton" onClick={() => toggleCollapsed(dKey)}>{isCollapsed(dKey) ? "Expand" : "Collapse"}</button>
+                    <button
+                      className="secondaryButton"
+                      onClick={() => toggleCollapsed(dKey)}
+                      aria-label={isCollapsed(dKey) ? "Expand decode log panel" : "Collapse decode log panel"}
+                      title={isCollapsed(dKey) ? "Expand decode log panel" : "Collapse decode log panel"}
+                    >
+                      {isCollapsed(dKey) ? "+" : "-"}
+                    </button>
                   </div>
                   {!isCollapsed(dKey) ? (
                     <>
