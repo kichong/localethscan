@@ -303,20 +303,6 @@ export default function App() {
       const current = key in prev ? Boolean(prev[key]) : defaultCollapsed;
       return { ...prev, [key]: !current };
     });
-  const setFunctionGroupCollapsed = (
-    contractId: string,
-    section: "read" | "write",
-    functions: AbiFunction[],
-    value: boolean
-  ) =>
-    setCollapsed((prev) => {
-      const next = { ...prev };
-      const baseKey = `c:${contractId}:${section}`;
-      for (const fn of functions) {
-        next[`${baseKey}:${getFunctionSignature(fn)}`] = value;
-      }
-      return next;
-    });
 
   const checkChain = async () => {
     try {
@@ -898,24 +884,6 @@ export default function App() {
                     <h3>Read Functions ({openReadCount}/{reads.length} open)</h3>
                     <div className="row wrap">
                       <button
-                        className="secondaryButton allToggleButton"
-                        onClick={() => setFunctionGroupCollapsed(contract.id, "read", reads, false)}
-                        disabled={reads.length === 0}
-                        aria-label="Expand all read functions"
-                        title="Expand all read functions"
-                      >
-                        + all
-                      </button>
-                      <button
-                        className="secondaryButton allToggleButton"
-                        onClick={() => setFunctionGroupCollapsed(contract.id, "read", reads, true)}
-                        disabled={reads.length === 0}
-                        aria-label="Collapse all read functions"
-                        title="Collapse all read functions"
-                      >
-                        - all
-                      </button>
-                      <button
                         className="secondaryButton"
                         onClick={() => toggleCollapsed(rKey)}
                         aria-label={isCollapsed(rKey) ? "Expand read function list" : "Collapse read function list"}
@@ -982,24 +950,6 @@ export default function App() {
                   <div className="panelHeader">
                     <h3>Write Functions ({openWriteCount}/{writes.length} open)</h3>
                     <div className="row wrap">
-                      <button
-                        className="secondaryButton allToggleButton"
-                        onClick={() => setFunctionGroupCollapsed(contract.id, "write", writes, false)}
-                        disabled={writes.length === 0}
-                        aria-label="Expand all write functions"
-                        title="Expand all write functions"
-                      >
-                        + all
-                      </button>
-                      <button
-                        className="secondaryButton allToggleButton"
-                        onClick={() => setFunctionGroupCollapsed(contract.id, "write", writes, true)}
-                        disabled={writes.length === 0}
-                        aria-label="Collapse all write functions"
-                        title="Collapse all write functions"
-                      >
-                        - all
-                      </button>
                       <button
                         className="secondaryButton"
                         onClick={() => toggleCollapsed(wKey)}

@@ -197,11 +197,6 @@ header p {
   filter: brightness(1.08);
 }
 
-.allToggleButton {
-  min-width: 56px;
-  font-weight: 600;
-}
-
 .mutability {
   color: var(--muted);
   font-size: 13px;
