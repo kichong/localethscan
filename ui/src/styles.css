@@ -269,7 +269,7 @@ body {
 
 .rpcInputRow {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   gap: 8px;
   align-items: center;
 }
@@ -336,6 +336,14 @@ body {
 .modeToggle.active {
   background: var(--button-bg);
   color: var(--button-text);
+}
+
+.walletPanel {
+  gap: 8px;
+}
+
+.walletChoiceRow {
+  margin-top: 2px;
 }
 
 .okBox,

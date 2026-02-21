@@ -21,6 +21,18 @@ type ChainStatus = { connected: boolean; chainId?: number; latestBlock?: bigint;
 type FunctionResult = { loading?: boolean; output?: string; error?: string };
 type WriteResult = { loading?: boolean; txHash?: string; receiptSummary?: string; decodedLogs?: string; error?: string };
 type ContractEntry = { id: string; name: string; address: string; abiText: string; abi: Abi };
+type WalletProviderId = "metamask" | "rabby" | `injected-${number}`;
+type InjectedProvider = {
+  request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown>;
+  providers?: InjectedProvider[];
+  isMetaMask?: boolean;
+  isRabby?: boolean;
+};
+type WalletProviderChoice = {
+  id: WalletProviderId;
+  label: string;
+  provider: InjectedProvider;
+};
 type ContractUI = {
   fnInputs: Record<string, string[]>;
   tupleDrafts: Record<string, Record<string, string>>;
@@ -39,6 +51,38 @@ function normalizeAddress(value: string): string {
 
 function isAddressLike(value: string): boolean {
   return isAddress(value as Address, { strict: false });
+}
+
+function getRpcUrlError(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return "RPC endpoint is required.";
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return "RPC endpoint must start with http:// or https://.";
+    }
+    return null;
+  } catch {
+    return "RPC endpoint URL is invalid.";
+  }
+}
+
+function getInjectedWalletChoices(): WalletProviderChoice[] {
+  if (typeof window === "undefined") return [];
+  const root = (window as any).ethereum as InjectedProvider | undefined;
+  if (!root) return [];
+  const providers = Array.isArray(root.providers) && root.providers.length > 0 ? root.providers : [root];
+  const unique: InjectedProvider[] = [];
+  for (const provider of providers) {
+    if (!provider || typeof provider.request !== "function") continue;
+    if (unique.includes(provider)) continue;
+    unique.push(provider);
+  }
+  return unique.map((provider, index) => {
+    if (provider.isRabby) return { id: "rabby", label: "Rabby", provider };
+    if (provider.isMetaMask) return { id: "metamask", label: "MetaMask", provider };
+    return { id: `injected-${index}`, label: `Injected wallet ${index + 1}`, provider };
+  });
 }
 
 function parseAbiText(input: string): Abi {
@@ -254,12 +298,18 @@ function parseImportFile(text: string, fileName: string): ContractEntry[] {
 export default function App() {
   const initial = loadSession();
   const [rpcUrl, setRpcUrl] = useState(initial.rpcUrl);
+  const [rpcInputDraft, setRpcInputDraft] = useState(initial.rpcUrl);
   const [darkMode, setDarkMode] = useState(initial.darkMode);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(initial.collapsed);
   const [chainStatus, setChainStatus] = useState<ChainStatus>({ connected: false });
   const [accounts, setAccounts] = useState<string[]>([]);
   const [senderBalances, setSenderBalances] = useState<Record<string, string>>({});
   const [writeMode, setWriteMode] = useState<"local" | "wallet">("local");
+  const [walletProviderId, setWalletProviderId] = useState<WalletProviderId | "">("");
+  const [walletProviderLabel, setWalletProviderLabel] = useState("");
+  const [walletAccounts, setWalletAccounts] = useState<string[]>([]);
+  const [walletChooserOpen, setWalletChooserOpen] = useState(false);
+  const [walletConnectLoading, setWalletConnectLoading] = useState(false);
   const [walletAccount, setWalletAccount] = useState("");
   const [walletBalance, setWalletBalance] = useState("");
   const [walletError, setWalletError] = useState("");
@@ -275,7 +325,16 @@ export default function App() {
   const [managerError, setManagerError] = useState("");
   const [managerMessage, setManagerMessage] = useState("");
 
-  const client = useMemo(() => createPublicClient({ transport: http(rpcUrl) }), [rpcUrl]);
+  const rpcUrlError = useMemo(() => getRpcUrlError(rpcUrl), [rpcUrl]);
+  const client = useMemo(
+    () => (rpcUrlError ? null : createPublicClient({ transport: http(rpcUrl.trim()) })),
+    [rpcUrl, rpcUrlError]
+  );
+  const walletChoices = getInjectedWalletChoices();
+  const hasRpcAccounts = accounts.length > 0;
+  const effectiveWriteMode: "local" | "wallet" = hasRpcAccounts ? writeMode : "wallet";
+  const activeSenderAddress = effectiveWriteMode === "wallet" ? walletAccount : fromAddress;
+  const activeSenderBalance = effectiveWriteMode === "wallet" ? walletBalance : senderBalances[fromAddress] ?? "";
 
   useEffect(() => {
     document.body.dataset.theme = darkMode ? "dark" : "light";
@@ -293,6 +352,23 @@ export default function App() {
     );
   }, [rpcUrl, darkMode, collapsed, contracts]);
 
+  useEffect(() => {
+    setRpcInputDraft(rpcUrl);
+  }, [rpcUrl]);
+
+  const applyRpcDraft = (): string => {
+    const next = rpcInputDraft.trim();
+    setRpcUrl(next);
+    return next;
+  };
+
+  const applyAndCheckRpc = () => {
+    const next = applyRpcDraft();
+    if (next === rpcUrl.trim()) {
+      void checkChain();
+    }
+  };
+
   const setContractState = (id: string, updater: (s: ContractUI) => ContractUI) => {
     setContractStates((prev) => ({ ...prev, [id]: updater(prev[id] ?? emptyUI()) }));
   };
@@ -306,6 +382,13 @@ export default function App() {
     });
 
   const checkChain = async () => {
+    if (!client) {
+      setChainStatus({ connected: false, error: rpcUrlError ?? "RPC endpoint is not set." });
+      setAccounts([]);
+      setSenderBalances({});
+      setFromAddress("");
+      return;
+    }
     try {
       const [chainId, latestBlock, rpcAccounts] = await Promise.all([
         client.getChainId(),
@@ -334,13 +417,18 @@ export default function App() {
 
   useEffect(() => {
     void checkChain();
+    if (!client) return;
     const id = window.setInterval(() => void checkChain(), 5000);
     return () => window.clearInterval(id);
-  }, [client]);
+  }, [client, rpcUrlError]);
+
+  useEffect(() => {
+    if (!hasRpcAccounts && writeMode === "local") setWriteMode("wallet");
+  }, [hasRpcAccounts, writeMode]);
 
   useEffect(() => {
     const loadWalletBalance = async () => {
-      if (!walletAccount) {
+      if (!walletAccount || !client) {
         setWalletBalance("");
         return;
       }
@@ -476,21 +564,45 @@ export default function App() {
     return (fn.inputs ?? []).map((input, i) => parseArgFromText(input, values[i] ?? ""));
   };
 
-  const connectWallet = async () => {
+  const getWalletChoice = (providerId?: WalletProviderId | ""): WalletProviderChoice | undefined => {
+    const available = getInjectedWalletChoices();
+    if (providerId) return available.find((choice) => choice.id === providerId);
+    if (walletProviderId) return available.find((choice) => choice.id === walletProviderId) ?? available[0];
+    return available[0];
+  };
+
+  const connectWallet = async (providerId?: WalletProviderId) => {
     setWalletError("");
+    const available = getInjectedWalletChoices();
+    if (!available.length) {
+      setWalletError("No injected wallet found. Install/use MetaMask, Rabby, or compatible wallet.");
+      return;
+    }
+    if (!providerId && available.length > 1) {
+      setWalletChooserOpen(true);
+      return;
+    }
     try {
-      if (typeof window === "undefined" || !(window as any).ethereum) {
-        throw new Error("No injected wallet found. Install/use MetaMask or compatible wallet.");
-      }
+      setWalletConnectLoading(true);
+      const selectedProvider = getWalletChoice(providerId);
+      if (!selectedProvider) throw new Error("Selected wallet provider is not available.");
       const walletClient = createWalletClient({
-        transport: custom((window as any).ethereum)
+        transport: custom(selectedProvider.provider as any)
       });
-      const addresses = await walletClient.requestAddresses();
+      const addresses = (await walletClient.requestAddresses())
+        .map(normalizeAddress)
+        .filter(Boolean);
       if (!addresses.length) throw new Error("Wallet did not return an address.");
-      setWalletAccount(normalizeAddress(addresses[0]));
+      setWalletProviderId(selectedProvider.id);
+      setWalletProviderLabel(selectedProvider.label);
+      setWalletAccounts(addresses);
+      setWalletAccount((prev) => (prev && addresses.includes(prev) ? prev : addresses[0]));
       setWriteMode("wallet");
+      setWalletChooserOpen(false);
     } catch (error) {
       setWalletError(error instanceof Error ? error.message : "Wallet connection failed.");
+    } finally {
+      setWalletConnectLoading(false);
     }
   };
 
@@ -522,6 +634,7 @@ export default function App() {
     const signature = getFunctionSignature(fn);
     setContractState(contract.id, (prev) => ({ ...prev, readResults: { ...prev.readResults, [signature]: { loading: true } } }));
     try {
+      if (!client) throw new Error(rpcUrlError ?? "Enter a valid RPC endpoint.");
       const result = await (client as any).readContract({
         address: contract.address as Address,
         abi: contract.abi,
@@ -538,6 +651,7 @@ export default function App() {
     const signature = getFunctionSignature(fn);
     setContractState(contract.id, (prev) => ({ ...prev, writeResults: { ...prev.writeResults, [signature]: { loading: true } } }));
     try {
+      if (!client) throw new Error(rpcUrlError ?? "Enter a valid RPC endpoint.");
       const txData = encodeFunctionData({
         abi: contract.abi,
         functionName: fn.name,
@@ -552,15 +666,20 @@ export default function App() {
         if (wei) txParams.value = toHex(BigInt(wei));
       }
       let txHash: Hex;
-      if (writeMode === "wallet") {
-        if (typeof window === "undefined" || !(window as any).ethereum) {
-          throw new Error("No injected wallet found.");
-        }
+      if (effectiveWriteMode === "wallet") {
+        const selectedProvider = getWalletChoice();
+        if (!selectedProvider) throw new Error("Wallet is not connected. Click Connect wallet.");
         const walletClient = createWalletClient({
-          transport: custom((window as any).ethereum)
+          transport: custom(selectedProvider.provider as any)
         });
-        const addresses = await walletClient.requestAddresses();
-        const selected = normalizeAddress(walletAccount || addresses[0] || "");
+        const addresses = (await walletClient.requestAddresses())
+          .map(normalizeAddress)
+          .filter(Boolean);
+        if (!addresses.length) throw new Error("Wallet did not return an address.");
+        setWalletProviderId(selectedProvider.id);
+        setWalletProviderLabel(selectedProvider.label);
+        setWalletAccounts(addresses);
+        const selected = addresses.includes(walletAccount) ? walletAccount : addresses[0];
         if (!selected) throw new Error("No wallet account available.");
         setWalletAccount(selected);
         txHash = (await walletClient.request({
@@ -609,6 +728,7 @@ export default function App() {
 
   const decodeRawLogFromTxHash = async (contract: ContractEntry) => {
     try {
+      if (!client) throw new Error(rpcUrlError ?? "Enter a valid RPC endpoint.");
       const state = getContractState(contract.id);
       const txHash = state.rawTxHash.trim() as Hex;
       if (!txHash || !txHash.startsWith("0x")) {
@@ -713,9 +833,23 @@ export default function App() {
           {!isCollapsed("rpc") ? (
             <>
               <div className="rpcInputRow">
-                <input value={rpcUrl} onChange={(e) => setRpcUrl(e.target.value)} placeholder={DEFAULT_RPC} />
-                <button onClick={() => void checkChain()}>Check</button>
+                <input
+                  value={rpcInputDraft}
+                  onChange={(e) => setRpcInputDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      applyAndCheckRpc();
+                    }
+                  }}
+                  placeholder={DEFAULT_RPC}
+                />
+                <button onClick={applyRpcDraft}>Apply</button>
+                <button className="secondaryButton" onClick={applyAndCheckRpc}>
+                  Check
+                </button>
               </div>
+              {rpcUrlError ? <div className="errorBox">{rpcUrlError}</div> : null}
               <div className="status rpcStatusGrid">
                 {chainStatus.connected ? (
                   <>
@@ -801,80 +935,134 @@ export default function App() {
             </div>
             {!isCollapsed("sender") ? (
               <>
-                <label>From address (`eth_accounts` from current RPC)</label>
-                <select value={fromAddress} onChange={(e) => setFromAddress(normalizeAddress(e.target.value))}>
-                  <option value="">Select sender</option>
-                  {accounts.map((account) => (
-                    <option key={account} value={account}>
-                      {account} ({senderBalances[account] ?? "..."} ETH)
-                    </option>
-                  ))}
-                </select>
-                <div className="row wrap senderActionRow">
+                <span className="hint">
+                  {hasRpcAccounts
+                    ? "Unlocked RPC accounts detected. Use local mode for Anvil/Hardhat writes."
+                    : "No unlocked RPC accounts detected. Wallet mode is active for live/testnet writes."}
+                </span>
+                <label>Write mode</label>
+                <div className="modeToggleGroup" role="tablist" aria-label="Write mode">
                   <button
-                    className="secondaryButton"
-                    onClick={() => void copyAddress(fromAddress)}
-                    disabled={!fromAddress}
+                    type="button"
+                    className={`modeToggle ${effectiveWriteMode === "local" ? "active" : ""}`}
+                    aria-pressed={effectiveWriteMode === "local"}
+                    onClick={() => setWriteMode("local")}
+                    disabled={!hasRpcAccounts}
+                    title={!hasRpcAccounts ? "Current RPC has no unlocked accounts." : "Use eth_accounts sender"}
                   >
-                    {copiedAddress === fromAddress && fromAddress ? "Copied" : "Copy selected"}
+                    Local unlocked
+                  </button>
+                  <button
+                    type="button"
+                    className={`modeToggle ${effectiveWriteMode === "wallet" ? "active" : ""}`}
+                    aria-pressed={effectiveWriteMode === "wallet"}
+                    onClick={() => setWriteMode("wallet")}
+                  >
+                    Wallet
                   </button>
                 </div>
-                <div className="senderSummary">
-                  <span className="hint">Selected sender</span>
-                  <code>{fromAddress || "None selected"}</code>
+
+                {hasRpcAccounts ? (
+                  <>
+                    <label>Local sender (`eth_accounts` from current RPC)</label>
+                    <select value={fromAddress} onChange={(e) => setFromAddress(normalizeAddress(e.target.value))}>
+                      <option value="">Select sender</option>
+                      {accounts.map((account) => (
+                        <option key={account} value={account}>
+                          {account} ({senderBalances[account] ?? "..."} ETH)
+                        </option>
+                      ))}
+                    </select>
+                    <div className="row wrap senderActionRow">
+                      <button
+                        className="secondaryButton"
+                        onClick={() => void copyAddress(fromAddress)}
+                        disabled={!fromAddress}
+                      >
+                        {copiedAddress === fromAddress && fromAddress ? "Copied" : "Copy local sender"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <span className="hint">Current RPC returned no unlocked addresses via `eth_accounts`.</span>
+                )}
+
+                <div className="innerPanel walletPanel">
+                  <div className="panelHeader">
+                    <h3>Wallet Sender (Live/Testnet/Mainnet)</h3>
+                  </div>
+                  <div className="row wrap">
+                    <button
+                      className="secondaryButton"
+                      onClick={() => void connectWallet()}
+                      disabled={walletConnectLoading}
+                    >
+                      {walletConnectLoading
+                        ? "Connecting..."
+                        : walletAccount
+                          ? "Reconnect wallet"
+                          : "Connect wallet"}
+                    </button>
+                    <button
+                      className="secondaryButton"
+                      onClick={() => void copyAddress(walletAccount)}
+                      disabled={!walletAccount}
+                    >
+                      {copiedAddress === walletAccount && walletAccount ? "Copied" : "Copy wallet address"}
+                    </button>
+                  </div>
+
+                  {walletChoices.length > 1 ? <span className="hint">Choose which wallet to open:</span> : null}
+                  {walletChooserOpen && walletChoices.length > 1 ? (
+                    <div className="row wrap walletChoiceRow">
+                      {walletChoices.map((choice) => (
+                        <button
+                          key={choice.id}
+                          className="secondaryButton"
+                          onClick={() => void connectWallet(choice.id)}
+                          disabled={walletConnectLoading}
+                        >
+                          Open {choice.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {walletAccounts.length ? (
+                    <>
+                      <label>Connected wallet address</label>
+                      <select value={walletAccount} onChange={(e) => setWalletAccount(normalizeAddress(e.target.value))}>
+                        {walletAccounts.map((address) => (
+                          <option key={address} value={address}>
+                            {address}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  ) : (
+                    <span className="hint">No wallet address connected yet.</span>
+                  )}
+                  <span className="hint">Wallet provider: {walletProviderLabel || "Not selected"}</span>
                   <span className="hint">
-                    Balance: {fromAddress ? `${senderBalances[fromAddress] ?? "..."} ETH` : "-"}
+                    Wallet balance (via current RPC): {walletAccount ? `${walletBalance || "..."} ETH` : "-"}
                   </span>
+                  {walletError ? <div className="errorBox">{walletError}</div> : null}
                 </div>
 
-                <div className="innerPanel">
-                  <div className="panelHeader">
-                    <h3>Live Chain Writes</h3>
-                  </div>
-                  <label>Write mode</label>
-                  <div className="modeToggleGroup" role="tablist" aria-label="Write mode">
-                    <button
-                      type="button"
-                      className={`modeToggle ${writeMode === "local" ? "active" : ""}`}
-                      aria-pressed={writeMode === "local"}
-                      onClick={() => setWriteMode("local")}
-                    >
-                      Local unlocked
-                    </button>
-                    <button
-                      type="button"
-                      className={`modeToggle ${writeMode === "wallet" ? "active" : ""}`}
-                      aria-pressed={writeMode === "wallet"}
-                      onClick={() => setWriteMode("wallet")}
-                    >
-                      Wallet
-                    </button>
-                  </div>
-                  {writeMode === "wallet" ? (
-                    <>
-                      <div className="row wrap">
-                        <button className="secondaryButton" onClick={() => void connectWallet()}>
-                          {walletAccount ? "Reconnect wallet" : "Connect wallet"}
-                        </button>
-                        <button
-                          className="secondaryButton"
-                          onClick={() => void copyAddress(walletAccount)}
-                          disabled={!walletAccount}
-                        >
-                          {copiedAddress === walletAccount && walletAccount
-                            ? "Copied"
-                            : "Copy wallet address"}
-                        </button>
-                      </div>
-                      <span className="hint">
-                        Wallet: {walletAccount || "Not connected"}
-                      </span>
-                      <span className="hint">
-                        Wallet balance (via current RPC):{" "}
-                        {walletAccount ? `${walletBalance || "..."} ETH` : "-"}
-                      </span>
-                      {walletError ? <div className="errorBox">{walletError}</div> : null}
-                    </>
+                <div className="senderSummary">
+                  <span className="hint">Active write sender</span>
+                  <code>{activeSenderAddress || "None selected"}</code>
+                  <span className="hint">
+                    Source: {effectiveWriteMode === "wallet" ? "Wallet" : "Local unlocked RPC sender"}
+                  </span>
+                  <span className="hint">
+                    Balance: {activeSenderAddress ? `${activeSenderBalance || "..."} ETH` : "-"}
+                  </span>
+                  {effectiveWriteMode === "wallet" && !walletAccount ? (
+                    <span className="hint">Connect a wallet before sending write transactions.</span>
+                  ) : null}
+                  {effectiveWriteMode === "local" && !fromAddress ? (
+                    <span className="hint">Pick a local unlocked sender before sending write transactions.</span>
                   ) : null}
                 </div>
               </>
