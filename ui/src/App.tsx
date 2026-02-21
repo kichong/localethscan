@@ -12,7 +12,8 @@ import {
 } from "viem";
 import type { Abi, AbiParameter, Address, Hex } from "viem";
 
-const STORAGE_KEY = "localethscan:mvp:v2";
+const STORAGE_KEY = "localethscan:workspace:v2";
+const LEGACY_STORAGE_KEY = "localethscan:mvp:v2";
 const DEFAULT_RPC = "http://127.0.0.1:8545";
 
 type AbiFunction = Extract<Abi[number], { type: "function" }>;
@@ -205,7 +206,7 @@ function loadSession(): {
   contracts: ContractEntry[];
 } {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return { rpcUrl: DEFAULT_RPC, darkMode: false, collapsed: {}, contracts: [] };
     const parsed = JSON.parse(raw);
     const contracts: ContractEntry[] = [];
@@ -426,6 +427,14 @@ export default function App() {
       }
       return next;
     });
+  };
+
+  const requestRemoveContract = (contract: ContractEntry) => {
+    const shouldRemove = window.confirm(
+      `Remove ${contract.name} (${contract.address}) from this workspace?`
+    );
+    if (!shouldRemove) return;
+    removeContract(contract.id);
   };
 
   const updateFunctionInput = (contractId: string, signature: string, index: number, value: string) => {
@@ -673,8 +682,7 @@ export default function App() {
     <div className="app">
       <header className="pageHeader">
         <div>
-          <h1>localethscan MVP</h1>
-          <p>Local-only contract read/write + log decode helper for Anvil-style RPCs.</p>
+          <h1>localethscan</h1>
         </div>
         <div className="row wrap">
           <button className="secondaryButton" onClick={exportWorkspace}>
@@ -686,157 +694,203 @@ export default function App() {
         </div>
       </header>
 
-      <section className="panel">
-        <div className="panelHeader">
+      <section className="zoneShell rpcZone">
+        <div className="zoneHeader">
           <h2>RPC</h2>
-          <button
-            className="secondaryButton"
-            onClick={() => toggleCollapsed("rpc")}
-            aria-label={isCollapsed("rpc") ? "Expand RPC panel" : "Collapse RPC panel"}
-            title={isCollapsed("rpc") ? "Expand RPC panel" : "Collapse RPC panel"}
-          >
-            {isCollapsed("rpc") ? "+" : "-"}
-          </button>
         </div>
-        {!isCollapsed("rpc") ? (
-          <>
-            <div className="row">
-              <input value={rpcUrl} onChange={(e) => setRpcUrl(e.target.value)} placeholder={DEFAULT_RPC} />
-              <button onClick={() => void checkChain()}>Check</button>
-            </div>
-            <div className="status">
-              {chainStatus.connected ? (
-                <>
-                  <span className="ok">connected</span>
-                  <span>chain id: {chainStatus.chainId}</span>
-                  <span>latest block: {chainStatus.latestBlock?.toString()}</span>
-                </>
-              ) : (
-                <>
-                  <span className="error">disconnected</span>
-                  <span>{chainStatus.error ?? "No response from RPC."}</span>
-                </>
-              )}
-            </div>
-          </>
-        ) : null}
+        <section className="panel controlPanel rpcPanel">
+          <div className="panelHeader">
+            <h3>RPC Endpoint</h3>
+            <button
+              className="secondaryButton"
+              onClick={() => toggleCollapsed("rpc")}
+              aria-label={isCollapsed("rpc") ? "Expand RPC panel" : "Collapse RPC panel"}
+              title={isCollapsed("rpc") ? "Expand RPC panel" : "Collapse RPC panel"}
+            >
+              {isCollapsed("rpc") ? "+" : "-"}
+            </button>
+          </div>
+          {!isCollapsed("rpc") ? (
+            <>
+              <div className="rpcInputRow">
+                <input value={rpcUrl} onChange={(e) => setRpcUrl(e.target.value)} placeholder={DEFAULT_RPC} />
+                <button onClick={() => void checkChain()}>Check</button>
+              </div>
+              <div className="status rpcStatusGrid">
+                {chainStatus.connected ? (
+                  <>
+                    <span className="statusPill ok">Connected</span>
+                    <span className="statusPill">Chain ID: {chainStatus.chainId}</span>
+                    <span className="statusPill">Latest block: {chainStatus.latestBlock?.toString()}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="statusPill error">Disconnected</span>
+                    <span className="statusPill">{chainStatus.error ?? "No response from RPC."}</span>
+                  </>
+                )}
+              </div>
+            </>
+          ) : null}
+        </section>
       </section>
 
-      <section className="panel">
-        <div className="panelHeader">
-          <h2>Contract Manager</h2>
-          <button
-            className="secondaryButton"
-            onClick={() => toggleCollapsed("manager")}
-            aria-label={isCollapsed("manager") ? "Expand contract manager" : "Collapse contract manager"}
-            title={isCollapsed("manager") ? "Expand contract manager" : "Collapse contract manager"}
-          >
-            {isCollapsed("manager") ? "+" : "-"}
-          </button>
+      <section className="zoneShell controlsZone">
+        <div className="zoneHeader">
+          <h2>Workspace Controls</h2>
         </div>
-        {!isCollapsed("manager") ? (
-          <>
-            <label>Contract name</label>
-            <input value={contractNameInput} onChange={(e) => setContractNameInput(e.target.value)} placeholder="my-contract" />
-            <label>Contract address (stored lowercase)</label>
-            <input value={contractAddressInput} onChange={(e) => setContractAddressInput(normalizeAddress(e.target.value))} placeholder="0x..." />
-            <label>ABI JSON</label>
-            <textarea value={abiTextInput} onChange={(e) => setAbiTextInput(e.target.value)} placeholder="Paste ABI array (or object with abi)" />
-            <div className="row wrap">
-              <input type="file" accept=".json,application/json" onChange={onAbiFilePick} />
-              <button onClick={addSingleContract}>Add Contract</button>
-            </div>
-            <label>Bulk import contracts JSON files (multi-select)</label>
-            <input type="file" accept=".json,application/json" multiple onChange={onImportFiles} />
-            <small className="hint">Supported: {`{name?, address, abi}`}, {`{contracts:[...]}`}, or array of contract objects.</small>
-            {managerError ? <div className="errorBox">{managerError}</div> : null}
-            {managerMessage ? <div className="okBox">{managerMessage}</div> : null}
-          </>
-        ) : null}
-      </section>
-
-      <section className="panel">
-        <div className="panelHeader">
-          <h2>Write Sender</h2>
-          <button
-            className="secondaryButton"
-            onClick={() => toggleCollapsed("sender")}
-            aria-label={isCollapsed("sender") ? "Expand write sender" : "Collapse write sender"}
-            title={isCollapsed("sender") ? "Expand write sender" : "Collapse write sender"}
-          >
-            {isCollapsed("sender") ? "+" : "-"}
-          </button>
-        </div>
-        {!isCollapsed("sender") ? (
-          <>
-            <label>From address (`eth_accounts` from current RPC)</label>
-            <select value={fromAddress} onChange={(e) => setFromAddress(normalizeAddress(e.target.value))}>
-              <option value="">Select sender</option>
-              {accounts.map((account) => (
-                <option key={account} value={account}>
-                  {account} ({senderBalances[account] ?? "..."} ETH)
-                </option>
-              ))}
-            </select>
-            <div className="row wrap">
+        <div className="controlDeck">
+          <section className="panel controlPanel managerPanel">
+            <div className="panelHeader">
+              <h3>Contract Manager</h3>
               <button
                 className="secondaryButton"
-                onClick={() => void copyAddress(fromAddress)}
-                disabled={!fromAddress}
+                onClick={() => toggleCollapsed("manager")}
+                aria-label={isCollapsed("manager") ? "Expand contract manager" : "Collapse contract manager"}
+                title={isCollapsed("manager") ? "Expand contract manager" : "Collapse contract manager"}
               >
-                {copiedAddress === fromAddress && fromAddress ? "Copied" : "Copy selected"}
+                {isCollapsed("manager") ? "+" : "-"}
               </button>
-              <span className="hint">
-                Selected balance: {fromAddress ? `${senderBalances[fromAddress] ?? "..."} ETH` : "-"}
-              </span>
             </div>
+            {!isCollapsed("manager") ? (
+              <>
+                <div className="innerPanel managerPane">
+                  <h4 className="controlSubhead">Add Single Contract</h4>
+                  <div className="managerFieldGrid">
+                    <div>
+                      <label>Contract name</label>
+                      <input value={contractNameInput} onChange={(e) => setContractNameInput(e.target.value)} placeholder="my-contract" />
+                    </div>
+                    <div>
+                      <label>Contract address (stored lowercase)</label>
+                      <input value={contractAddressInput} onChange={(e) => setContractAddressInput(normalizeAddress(e.target.value))} placeholder="0x..." />
+                    </div>
+                  </div>
+                  <label>ABI JSON</label>
+                  <textarea value={abiTextInput} onChange={(e) => setAbiTextInput(e.target.value)} placeholder="Paste ABI array (or object with abi)" />
+                  <div className="row wrap managerActionRow">
+                    <input type="file" accept=".json,application/json" onChange={onAbiFilePick} />
+                    <button onClick={addSingleContract}>Add Contract</button>
+                  </div>
+                </div>
 
-            <div className="innerPanel">
-              <div className="panelHeader">
-                <h3>Live Chain Writes (Experimental)</h3>
-              </div>
-              <label>Write mode</label>
-              <select
-                value={writeMode}
-                onChange={(e) => setWriteMode(e.target.value as "local" | "wallet")}
+                <div className="innerPanel managerPane">
+                  <h4 className="controlSubhead">Bulk Import</h4>
+                  <label>Contracts JSON files (multi-select)</label>
+                  <input type="file" accept=".json,application/json" multiple onChange={onImportFiles} />
+                  <small className="hint">Supported: {`{name?, address, abi}`}, {`{contracts:[...]}`}, or array of contract objects.</small>
+                </div>
+
+                {managerError ? <div className="errorBox">{managerError}</div> : null}
+                {managerMessage ? <div className="okBox">{managerMessage}</div> : null}
+              </>
+            ) : null}
+          </section>
+
+          <section className="panel controlPanel senderPanel">
+            <div className="panelHeader">
+              <h3>Write Sender</h3>
+              <button
+                className="secondaryButton"
+                onClick={() => toggleCollapsed("sender")}
+                aria-label={isCollapsed("sender") ? "Expand write sender" : "Collapse write sender"}
+                title={isCollapsed("sender") ? "Expand write sender" : "Collapse write sender"}
               >
-                <option value="local">Local unlocked accounts (primary)</option>
-                <option value="wallet">Wallet (secondary / experimental)</option>
-              </select>
-              {writeMode === "wallet" ? (
-                <>
-                  <div className="row wrap">
-                    <button className="secondaryButton" onClick={() => void connectWallet()}>
-                      {walletAccount ? "Reconnect wallet" : "Connect wallet"}
+                {isCollapsed("sender") ? "+" : "-"}
+              </button>
+            </div>
+            {!isCollapsed("sender") ? (
+              <>
+                <label>From address (`eth_accounts` from current RPC)</label>
+                <select value={fromAddress} onChange={(e) => setFromAddress(normalizeAddress(e.target.value))}>
+                  <option value="">Select sender</option>
+                  {accounts.map((account) => (
+                    <option key={account} value={account}>
+                      {account} ({senderBalances[account] ?? "..."} ETH)
+                    </option>
+                  ))}
+                </select>
+                <div className="row wrap senderActionRow">
+                  <button
+                    className="secondaryButton"
+                    onClick={() => void copyAddress(fromAddress)}
+                    disabled={!fromAddress}
+                  >
+                    {copiedAddress === fromAddress && fromAddress ? "Copied" : "Copy selected"}
+                  </button>
+                </div>
+                <div className="senderSummary">
+                  <span className="hint">Selected sender</span>
+                  <code>{fromAddress || "None selected"}</code>
+                  <span className="hint">
+                    Balance: {fromAddress ? `${senderBalances[fromAddress] ?? "..."} ETH` : "-"}
+                  </span>
+                </div>
+
+                <div className="innerPanel">
+                  <div className="panelHeader">
+                    <h3>Live Chain Writes</h3>
+                  </div>
+                  <label>Write mode</label>
+                  <div className="modeToggleGroup" role="tablist" aria-label="Write mode">
+                    <button
+                      type="button"
+                      className={`modeToggle ${writeMode === "local" ? "active" : ""}`}
+                      aria-pressed={writeMode === "local"}
+                      onClick={() => setWriteMode("local")}
+                    >
+                      Local unlocked
                     </button>
                     <button
-                      className="secondaryButton"
-                      onClick={() => void copyAddress(walletAccount)}
-                      disabled={!walletAccount}
+                      type="button"
+                      className={`modeToggle ${writeMode === "wallet" ? "active" : ""}`}
+                      aria-pressed={writeMode === "wallet"}
+                      onClick={() => setWriteMode("wallet")}
                     >
-                      {copiedAddress === walletAccount && walletAccount
-                        ? "Copied"
-                        : "Copy wallet address"}
+                      Wallet
                     </button>
                   </div>
-                  <span className="hint">
-                    Wallet: {walletAccount || "Not connected"}
-                  </span>
-                  <span className="hint">
-                    Wallet balance (via current RPC):{" "}
-                    {walletAccount ? `${walletBalance || "..."} ETH` : "-"}
-                  </span>
-                  {walletError ? <div className="errorBox">{walletError}</div> : null}
-                </>
-              ) : null}
-            </div>
-          </>
-        ) : null}
+                  {writeMode === "wallet" ? (
+                    <>
+                      <div className="row wrap">
+                        <button className="secondaryButton" onClick={() => void connectWallet()}>
+                          {walletAccount ? "Reconnect wallet" : "Connect wallet"}
+                        </button>
+                        <button
+                          className="secondaryButton"
+                          onClick={() => void copyAddress(walletAccount)}
+                          disabled={!walletAccount}
+                        >
+                          {copiedAddress === walletAccount && walletAccount
+                            ? "Copied"
+                            : "Copy wallet address"}
+                        </button>
+                      </div>
+                      <span className="hint">
+                        Wallet: {walletAccount || "Not connected"}
+                      </span>
+                      <span className="hint">
+                        Wallet balance (via current RPC):{" "}
+                        {walletAccount ? `${walletBalance || "..."} ETH` : "-"}
+                      </span>
+                      {walletError ? <div className="errorBox">{walletError}</div> : null}
+                    </>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+          </section>
+        </div>
       </section>
 
-      {contracts.length === 0 ? <section className="panel"><p>No contracts loaded yet. Add one in Contract Manager.</p></section> : null}
+      <section className="zoneShell deployedZone">
+        <div className="zoneHeader">
+          <h2>Deployed Contracts</h2>
+        </div>
 
-      {contracts.map((contract) => {
+        {contracts.length === 0 ? <section className="panel contractPanel"><p>No contracts loaded yet. Add one in Contract Manager.</p></section> : null}
+
+        {contracts.map((contract) => {
         const state = getContractState(contract.id);
         const functions = contract.abi.filter((item) => item.type === "function") as AbiFunction[];
         const reads = functions.filter((fn) => fn.stateMutability === "view" || fn.stateMutability === "pure");
@@ -855,11 +909,27 @@ export default function App() {
         );
 
         return (
-          <section className="panel" key={contract.id}>
-            <div className="panelHeader">
-              <h2>{contract.name}</h2>
-              <div className="row">
-                <button className="secondaryButton" onClick={() => void copyAddress(contract.address)}>Copy Address</button>
+          <section className="panel contractPanel" key={contract.id}>
+            <div className="panelHeader contractHeader">
+              <div className="contractIdentity">
+                <h2>{contract.name}</h2>
+                <div className="contractMeta">
+                  <code>{contract.address}</code>
+                  <span className="hint">ABI functions: {functions.length}</span>
+                </div>
+              </div>
+              <div className="row wrap contractActions">
+                <button className="secondaryButton" onClick={() => void copyAddress(contract.address)}>
+                  {copiedAddress === contract.address ? "Copied" : "Copy Address"}
+                </button>
+                <button
+                  className="dangerButton iconDangerButton"
+                  onClick={() => requestRemoveContract(contract)}
+                  aria-label={`Remove ${contract.name}`}
+                  title="Remove contract"
+                >
+                  X
+                </button>
                 <button
                   className="secondaryButton"
                   onClick={() => toggleCollapsed(cKey)}
@@ -875,9 +945,7 @@ export default function App() {
               <>
                 <label>Rename contract</label>
                 <input defaultValue={contract.name} onBlur={(e) => renameContract(contract.id, e.target.value)} />
-                <div className="addressLine"><span>address:</span> <code>{contract.address}</code></div>
-                <div className="hint">ABI functions: {functions.length}</div>
-                <button className="dangerButton" onClick={() => removeContract(contract.id)}>Remove Contract</button>
+                <div className="addressLine"><span>deployed:</span> <code>{contract.address}</code></div>
 
                 <section className="innerPanel">
                   <div className="panelHeader">
@@ -1126,6 +1194,7 @@ export default function App() {
           </section>
         );
       })}
+      </section>
     </div>
   );
 }
