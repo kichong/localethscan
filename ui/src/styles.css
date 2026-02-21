@@ -321,6 +321,10 @@ body {
   background: color-mix(in srgb, var(--panel-soft) 84%, transparent);
 }
 
+.senderCollapsedSummary {
+  margin-top: 2px;
+}
+
 .modeToggleGroup {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

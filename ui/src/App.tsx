@@ -571,6 +571,20 @@ export default function App() {
     return available[0];
   };
 
+  const clearWalletConnection = (minimizeWalletPanel = false) => {
+    setWalletProviderId("");
+    setWalletProviderLabel("");
+    setWalletAccounts([]);
+    setWalletAccount("");
+    setWalletBalance("");
+    setWalletError("");
+    setWalletChooserOpen(false);
+    setWriteMode(hasRpcAccounts ? "local" : "wallet");
+    if (minimizeWalletPanel) {
+      setCollapsed((prev) => ({ ...prev, walletSender: true }));
+    }
+  };
+
   const connectWallet = async (providerId?: WalletProviderId) => {
     setWalletError("");
     const available = getInjectedWalletChoices();
@@ -990,63 +1004,84 @@ export default function App() {
                 <div className="innerPanel walletPanel">
                   <div className="panelHeader">
                     <h3>Wallet Sender (Live/Testnet/Mainnet)</h3>
-                  </div>
-                  <div className="row wrap">
                     <button
                       className="secondaryButton"
-                      onClick={() => void connectWallet()}
-                      disabled={walletConnectLoading}
+                      onClick={() => toggleCollapsed("walletSender")}
+                      aria-label={isCollapsed("walletSender") ? "Expand wallet sender" : "Collapse wallet sender"}
+                      title={isCollapsed("walletSender") ? "Expand wallet sender" : "Collapse wallet sender"}
                     >
-                      {walletConnectLoading
-                        ? "Connecting..."
-                        : walletAccount
-                          ? "Reconnect wallet"
-                          : "Connect wallet"}
-                    </button>
-                    <button
-                      className="secondaryButton"
-                      onClick={() => void copyAddress(walletAccount)}
-                      disabled={!walletAccount}
-                    >
-                      {copiedAddress === walletAccount && walletAccount ? "Copied" : "Copy wallet address"}
+                      {isCollapsed("walletSender") ? "+" : "-"}
                     </button>
                   </div>
-
-                  {walletChoices.length > 1 ? <span className="hint">Choose which wallet to open:</span> : null}
-                  {walletChooserOpen && walletChoices.length > 1 ? (
-                    <div className="row wrap walletChoiceRow">
-                      {walletChoices.map((choice) => (
+                  {!isCollapsed("walletSender") ? (
+                    <>
+                      <div className="row wrap">
                         <button
-                          key={choice.id}
                           className="secondaryButton"
-                          onClick={() => void connectWallet(choice.id)}
+                          onClick={() => void connectWallet()}
                           disabled={walletConnectLoading}
                         >
-                          Open {choice.label}
+                          {walletConnectLoading
+                            ? "Connecting..."
+                            : walletAccount
+                              ? "Reconnect wallet"
+                              : "Connect wallet"}
                         </button>
-                      ))}
-                    </div>
-                  ) : null}
+                        <button
+                          className="secondaryButton"
+                          onClick={() => clearWalletConnection(true)}
+                          disabled={walletConnectLoading}
+                        >
+                          Disconnect + clear
+                        </button>
+                        <button
+                          className="secondaryButton"
+                          onClick={() => void copyAddress(walletAccount)}
+                          disabled={!walletAccount}
+                        >
+                          {copiedAddress === walletAccount && walletAccount ? "Copied" : "Copy wallet address"}
+                        </button>
+                      </div>
 
-                  {walletAccounts.length ? (
-                    <>
-                      <label>Connected wallet address</label>
-                      <select value={walletAccount} onChange={(e) => setWalletAccount(normalizeAddress(e.target.value))}>
-                        {walletAccounts.map((address) => (
-                          <option key={address} value={address}>
-                            {address}
-                          </option>
-                        ))}
-                      </select>
+                      {walletChoices.length > 1 ? <span className="hint">Choose which wallet to open:</span> : null}
+                      {walletChooserOpen && walletChoices.length > 1 ? (
+                        <div className="row wrap walletChoiceRow">
+                          {walletChoices.map((choice) => (
+                            <button
+                              key={choice.id}
+                              className="secondaryButton"
+                              onClick={() => void connectWallet(choice.id)}
+                              disabled={walletConnectLoading}
+                            >
+                              Open {choice.label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {walletAccounts.length ? (
+                        <>
+                          <label>Connected wallet address</label>
+                          <select value={walletAccount} onChange={(e) => setWalletAccount(normalizeAddress(e.target.value))}>
+                            {walletAccounts.map((address) => (
+                              <option key={address} value={address}>
+                                {address}
+                              </option>
+                            ))}
+                          </select>
+                        </>
+                      ) : (
+                        <span className="hint">No wallet address connected yet.</span>
+                      )}
+                      <span className="hint">Wallet provider: {walletProviderLabel || "Not selected"}</span>
+                      <span className="hint">
+                        Wallet balance (via current RPC): {walletAccount ? `${walletBalance || "..."} ETH` : "-"}
+                      </span>
+                      {walletError ? <div className="errorBox">{walletError}</div> : null}
                     </>
                   ) : (
-                    <span className="hint">No wallet address connected yet.</span>
+                    <span className="hint">Wallet sender minimized.</span>
                   )}
-                  <span className="hint">Wallet provider: {walletProviderLabel || "Not selected"}</span>
-                  <span className="hint">
-                    Wallet balance (via current RPC): {walletAccount ? `${walletBalance || "..."} ETH` : "-"}
-                  </span>
-                  {walletError ? <div className="errorBox">{walletError}</div> : null}
                 </div>
 
                 <div className="senderSummary">
@@ -1066,7 +1101,27 @@ export default function App() {
                   ) : null}
                 </div>
               </>
-            ) : null}
+            ) : (
+              <div className="senderSummary senderCollapsedSummary">
+                <span className="hint">Active write sender</span>
+                <code>{activeSenderAddress || "None selected"}</code>
+                <div className="row wrap">
+                  <button
+                    className="secondaryButton"
+                    onClick={() => void copyAddress(activeSenderAddress)}
+                    disabled={!activeSenderAddress}
+                  >
+                    {copiedAddress === activeSenderAddress && activeSenderAddress ? "Copied" : "Copy active sender"}
+                  </button>
+                  <span className="hint">
+                    Source: {effectiveWriteMode === "wallet" ? "Wallet" : "Local unlocked RPC sender"}
+                  </span>
+                  <span className="hint">
+                    Balance: {activeSenderAddress ? `${activeSenderBalance || "..."} ETH` : "-"}
+                  </span>
+                </div>
+              </div>
+            )}
           </section>
         </div>
       </section>
