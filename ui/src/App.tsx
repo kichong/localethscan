@@ -873,10 +873,47 @@ export default function App() {
   return (
     <div className="app">
       <header className="pageHeader">
-        <div>
-          <h1>localethscan</h1>
-        </div>
-        <div className="row wrap">
+        <h1 className="appTitle">localethscan</h1>
+
+        <section className="rpcInline" aria-label="RPC endpoint and status">
+          <div className="rpcInlineRow">
+            <span className="rpcInlineLabel">RPC</span>
+            <input
+              value={rpcInputDraft}
+              onChange={(e) => setRpcInputDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  applyAndCheckRpc();
+                }
+              }}
+              placeholder={DEFAULT_RPC}
+            />
+            <button className="secondaryButton" onClick={applyRpcDraft}>
+              Apply
+            </button>
+            <button className="secondaryButton" onClick={applyAndCheckRpc}>
+              Check
+            </button>
+          </div>
+          <div className="status rpcInlineStatus">
+            {chainStatus.connected ? (
+              <>
+                <span className="statusPill ok">Connected</span>
+                <span className="statusPill">Chain ID: {chainStatus.chainId}</span>
+                <span className="statusPill">Latest block: {chainStatus.latestBlock?.toString()}</span>
+              </>
+            ) : (
+              <>
+                <span className="statusPill error">Disconnected</span>
+                <span className="statusPill">{chainStatus.error ?? "No response from RPC."}</span>
+              </>
+            )}
+          </div>
+          {rpcUrlError ? <div className="errorBox rpcInlineError">{rpcUrlError}</div> : null}
+        </section>
+
+        <div className="row wrap headerActions">
           <button className="secondaryButton" onClick={exportWorkspace}>
             Export Workspace JSON
           </button>
@@ -885,61 +922,6 @@ export default function App() {
           </button>
         </div>
       </header>
-
-      <section className="zoneShell rpcZone">
-        <div className="zoneHeader">
-          <h2>RPC</h2>
-        </div>
-        <section className="panel controlPanel rpcPanel">
-          <div className="panelHeader">
-            <h3>RPC Endpoint</h3>
-            <button
-              className="secondaryButton"
-              onClick={() => toggleCollapsed("rpc")}
-              aria-label={isCollapsed("rpc") ? "Expand RPC panel" : "Collapse RPC panel"}
-              title={isCollapsed("rpc") ? "Expand RPC panel" : "Collapse RPC panel"}
-            >
-              {isCollapsed("rpc") ? "+" : "-"}
-            </button>
-          </div>
-          {!isCollapsed("rpc") ? (
-            <>
-              <div className="rpcInputRow">
-                <input
-                  value={rpcInputDraft}
-                  onChange={(e) => setRpcInputDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      applyAndCheckRpc();
-                    }
-                  }}
-                  placeholder={DEFAULT_RPC}
-                />
-                <button onClick={applyRpcDraft}>Apply</button>
-                <button className="secondaryButton" onClick={applyAndCheckRpc}>
-                  Check
-                </button>
-              </div>
-              {rpcUrlError ? <div className="errorBox">{rpcUrlError}</div> : null}
-              <div className="status rpcStatusGrid">
-                {chainStatus.connected ? (
-                  <>
-                    <span className="statusPill ok">Connected</span>
-                    <span className="statusPill">Chain ID: {chainStatus.chainId}</span>
-                    <span className="statusPill">Latest block: {chainStatus.latestBlock?.toString()}</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="statusPill error">Disconnected</span>
-                    <span className="statusPill">{chainStatus.error ?? "No response from RPC."}</span>
-                  </>
-                )}
-              </div>
-            </>
-          ) : null}
-        </section>
-      </section>
 
       <section className="zoneShell controlsZone">
         <div className="zoneHeader">
