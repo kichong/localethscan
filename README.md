@@ -109,4 +109,8 @@ So yes, your understanding is correct.
 
 - Best experience today is local RPCs that expose unlocked accounts (Anvil default).
 - Public RPC endpoints usually do not allow `eth_sendTransaction` from arbitrary accounts. Use the experimental wallet mode for these environments.
+- Privacy mode is enabled by default in the UI:
+  - workspace persistence/export redacts RPC credentials or API-key style URL secrets
+  - runtime RPC behavior is unchanged for the active session (the endpoint you typed is still used live)
+  - local session features (reads/writes/log decode/import/export) continue to work as before
 - Solidity/Foundry files remain in this repo for contract development, but this README is centered on the UI workflow.

@@ -15,6 +15,22 @@ import type { Abi, AbiParameter, Address, Hex } from "viem";
 const STORAGE_KEY = "localethscan:workspace:v2";
 const LEGACY_STORAGE_KEY = "localethscan:mvp:v2";
 const DEFAULT_RPC = "http://127.0.0.1:8545";
+const PRIVACY_MODE_ENABLED = true;
+const REDACTED_TOKEN = "[redacted]";
+const SENSITIVE_RPC_KEYS = [
+  "key",
+  "api_key",
+  "apikey",
+  "token",
+  "access_token",
+  "secret",
+  "client_secret",
+  "password",
+  "signature",
+  "sig",
+  "auth",
+  "authorization"
+];
 
 type AbiFunction = Extract<Abi[number], { type: "function" }>;
 type ChainStatus = { connected: boolean; chainId?: number; latestBlock?: bigint; error?: string };
@@ -64,6 +80,51 @@ function getRpcUrlError(value: string): string | null {
     return null;
   } catch {
     return "RPC endpoint URL is invalid.";
+  }
+}
+
+function redactRpcUrlForPrivacy(value: string): string {
+  if (!PRIVACY_MODE_ENABLED) return value.trim();
+  const trimmed = value.trim();
+  if (!trimmed) return trimmed;
+  try {
+    const url = new URL(trimmed);
+    let changed = false;
+
+    if (url.username) {
+      url.username = REDACTED_TOKEN;
+      changed = true;
+    }
+    if (url.password) {
+      url.password = REDACTED_TOKEN;
+      changed = true;
+    }
+
+    for (const key of Array.from(url.searchParams.keys())) {
+      const normalizedKey = key.toLowerCase();
+      if (SENSITIVE_RPC_KEYS.some((sensitive) => normalizedKey.includes(sensitive))) {
+        url.searchParams.set(key, REDACTED_TOKEN);
+        changed = true;
+      }
+    }
+
+    const segments = url.pathname.split("/");
+    for (let i = 0; i < segments.length; i += 1) {
+      const segment = segments[i];
+      if (!segment) continue;
+      const prev = (segments[i - 1] ?? "").toLowerCase();
+      const looksLikeLongToken = /^[A-Za-z0-9_-]{20,}$/.test(segment);
+      const previousSuggestsSecret = /^(v2|v3|api|rpc|key|token)$/.test(prev);
+      if (looksLikeLongToken && previousSuggestsSecret) {
+        segments[i] = REDACTED_TOKEN;
+        changed = true;
+      }
+    }
+    if (changed) url.pathname = segments.join("/");
+
+    return changed ? url.toString() : trimmed;
+  } catch {
+    return trimmed;
   }
 }
 
@@ -341,10 +402,11 @@ export default function App() {
   }, [darkMode]);
 
   useEffect(() => {
+    const persistedRpcUrl = redactRpcUrlForPrivacy(rpcUrl);
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        rpcUrl,
+        rpcUrl: persistedRpcUrl,
         darkMode,
         collapsed,
         contracts: contracts.map((c) => ({ id: c.id, name: c.name, address: c.address, abiText: c.abiText }))
@@ -621,9 +683,10 @@ export default function App() {
   };
 
   const exportWorkspace = () => {
+    const exportedRpcUrl = redactRpcUrlForPrivacy(rpcUrl);
     const payload = {
       exportedAt: new Date().toISOString(),
-      rpcUrl,
+      rpcUrl: exportedRpcUrl,
       contracts: contracts.map((contract) => ({
         name: contract.name,
         address: contract.address,
@@ -681,26 +744,21 @@ export default function App() {
       }
       let txHash: Hex;
       if (effectiveWriteMode === "wallet") {
-        const selectedProvider = getWalletChoice();
-        if (!selectedProvider) throw new Error("Wallet is not connected. Click Connect wallet.");
+        if (!walletProviderId || !walletAccount) {
+          throw new Error("Wallet is disconnected. Click Connect wallet first.");
+        }
+        const selectedProvider = getWalletChoice(walletProviderId);
+        if (!selectedProvider) {
+          throw new Error("Connected wallet provider is no longer available. Reconnect wallet.");
+        }
         const walletClient = createWalletClient({
           transport: custom(selectedProvider.provider as any)
         });
-        const addresses = (await walletClient.requestAddresses())
-          .map(normalizeAddress)
-          .filter(Boolean);
-        if (!addresses.length) throw new Error("Wallet did not return an address.");
-        setWalletProviderId(selectedProvider.id);
-        setWalletProviderLabel(selectedProvider.label);
-        setWalletAccounts(addresses);
-        const selected = addresses.includes(walletAccount) ? walletAccount : addresses[0];
-        if (!selected) throw new Error("No wallet account available.");
-        setWalletAccount(selected);
         txHash = (await walletClient.request({
           method: "eth_sendTransaction",
           params: [
             {
-              from: selected as Address,
+              from: walletAccount as Address,
               to: contract.address as Address,
               data: txData,
               ...(txParams.value ? { value: txParams.value as string } : {})
