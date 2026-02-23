@@ -37,7 +37,7 @@ type ChainStatus = { connected: boolean; chainId?: number; latestBlock?: bigint;
 type FunctionResult = { loading?: boolean; output?: string; error?: string };
 type WriteResult = { loading?: boolean; txHash?: string; receiptSummary?: string; decodedLogs?: string; error?: string };
 type ContractEntry = { id: string; name: string; address: string; abiText: string; abi: Abi };
-type WalletProviderId = "metamask" | "rabby" | `injected-${number}`;
+type WalletProviderId = string;
 type InjectedProvider = {
   request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown>;
   providers?: InjectedProvider[];
@@ -131,18 +131,33 @@ function redactRpcUrlForPrivacy(value: string): string {
 function getInjectedWalletChoices(): WalletProviderChoice[] {
   if (typeof window === "undefined") return [];
   const root = (window as any).ethereum as InjectedProvider | undefined;
-  if (!root) return [];
-  const providers = Array.isArray(root.providers) && root.providers.length > 0 ? root.providers : [root];
-  const unique: InjectedProvider[] = [];
-  for (const provider of providers) {
-    if (!provider || typeof provider.request !== "function") continue;
-    if (unique.includes(provider)) continue;
-    unique.push(provider);
+  const rabby = (window as any).rabby as InjectedProvider | undefined;
+  const candidates: InjectedProvider[] = [];
+  const pushProvider = (provider?: InjectedProvider) => {
+    if (!provider || typeof provider.request !== "function") return;
+    if (candidates.includes(provider)) return;
+    candidates.push(provider);
+  };
+
+  pushProvider(root);
+  if (Array.isArray(root?.providers)) {
+    for (const provider of root.providers) pushProvider(provider);
   }
-  return unique.map((provider, index) => {
-    if (provider.isRabby) return { id: "rabby", label: "Rabby", provider };
-    if (provider.isMetaMask) return { id: "metamask", label: "MetaMask", provider };
-    return { id: `injected-${index}`, label: `Injected wallet ${index + 1}`, provider };
+  // Some browser setups expose Rabby on `window.rabby` instead of `window.ethereum.providers`.
+  pushProvider(rabby);
+
+  const labelCounts = new Map<string, number>();
+  return candidates.map((provider) => {
+    const baseLabel = provider.isRabby ? "Rabby" : provider.isMetaMask ? "MetaMask" : "Injected wallet";
+    const nextCount = (labelCounts.get(baseLabel) ?? 0) + 1;
+    labelCounts.set(baseLabel, nextCount);
+    const idBase = baseLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const labelSuffix = nextCount > 1 ? ` ${nextCount}` : "";
+    return {
+      id: `${idBase}-${nextCount}`,
+      label: `${baseLabel}${labelSuffix}`,
+      provider
+    };
   });
 }
 
@@ -367,9 +382,9 @@ export default function App() {
   const [senderBalances, setSenderBalances] = useState<Record<string, string>>({});
   const [writeMode, setWriteMode] = useState<"local" | "wallet">("local");
   const [walletProviderId, setWalletProviderId] = useState<WalletProviderId | "">("");
+  const [walletTargetProviderId, setWalletTargetProviderId] = useState<WalletProviderId | "">("");
   const [walletProviderLabel, setWalletProviderLabel] = useState("");
   const [walletAccounts, setWalletAccounts] = useState<string[]>([]);
-  const [walletChooserOpen, setWalletChooserOpen] = useState(false);
   const [walletConnectLoading, setWalletConnectLoading] = useState(false);
   const [walletAccount, setWalletAccount] = useState("");
   const [walletBalance, setWalletBalance] = useState("");
@@ -392,6 +407,12 @@ export default function App() {
     [rpcUrl, rpcUrlError]
   );
   const walletChoices = getInjectedWalletChoices();
+  const selectedWalletProviderId =
+    (walletTargetProviderId && walletChoices.some((choice) => choice.id === walletTargetProviderId)
+      ? walletTargetProviderId
+      : walletProviderId && walletChoices.some((choice) => choice.id === walletProviderId)
+        ? walletProviderId
+        : walletChoices[0]?.id) ?? "";
   const hasRpcAccounts = accounts.length > 0;
   const effectiveWriteMode: "local" | "wallet" = hasRpcAccounts ? writeMode : "wallet";
   const activeSenderAddress = effectiveWriteMode === "wallet" ? walletAccount : fromAddress;
@@ -626,11 +647,12 @@ export default function App() {
     return (fn.inputs ?? []).map((input, i) => parseArgFromText(input, values[i] ?? ""));
   };
 
-  const getWalletChoice = (providerId?: WalletProviderId | ""): WalletProviderChoice | undefined => {
-    const available = getInjectedWalletChoices();
-    if (providerId) return available.find((choice) => choice.id === providerId);
-    if (walletProviderId) return available.find((choice) => choice.id === walletProviderId) ?? available[0];
-    return available[0];
+  const getWalletChoice = (
+    providerId?: WalletProviderId | "",
+    choices: WalletProviderChoice[] = getInjectedWalletChoices()
+  ): WalletProviderChoice | undefined => {
+    if (providerId) return choices.find((choice) => choice.id === providerId);
+    return choices[0];
   };
 
   const clearWalletConnection = (minimizeWalletPanel = false) => {
@@ -640,7 +662,6 @@ export default function App() {
     setWalletAccount("");
     setWalletBalance("");
     setWalletError("");
-    setWalletChooserOpen(false);
     setWriteMode(hasRpcAccounts ? "local" : "wallet");
     if (minimizeWalletPanel) {
       setCollapsed((prev) => ({ ...prev, walletSender: true }));
@@ -654,13 +675,15 @@ export default function App() {
       setWalletError("No injected wallet found. Install/use MetaMask, Rabby, or compatible wallet.");
       return;
     }
-    if (!providerId && available.length > 1) {
-      setWalletChooserOpen(true);
-      return;
-    }
     try {
       setWalletConnectLoading(true);
-      const selectedProvider = getWalletChoice(providerId);
+      const fallbackProviderId =
+        (selectedWalletProviderId && available.some((choice) => choice.id === selectedWalletProviderId)
+          ? selectedWalletProviderId
+          : "") ||
+        (walletProviderId && available.some((choice) => choice.id === walletProviderId) ? walletProviderId : "") ||
+        available[0].id;
+      const selectedProvider = getWalletChoice(providerId ?? fallbackProviderId, available);
       if (!selectedProvider) throw new Error("Selected wallet provider is not available.");
       const walletClient = createWalletClient({
         transport: custom(selectedProvider.provider as any)
@@ -673,8 +696,8 @@ export default function App() {
       setWalletProviderLabel(selectedProvider.label);
       setWalletAccounts(addresses);
       setWalletAccount((prev) => (prev && addresses.includes(prev) ? prev : addresses[0]));
+      setWalletTargetProviderId(selectedProvider.id);
       setWriteMode("wallet");
-      setWalletChooserOpen(false);
     } catch (error) {
       setWalletError(error instanceof Error ? error.message : "Wallet connection failed.");
     } finally {
@@ -1055,6 +1078,26 @@ export default function App() {
                   </div>
                   {!isCollapsed("walletSender") ? (
                     <>
+                      {walletChoices.length ? (
+                        <>
+                          <label>Wallet provider</label>
+                          <select
+                            value={selectedWalletProviderId}
+                            onChange={(e) => setWalletTargetProviderId(e.target.value)}
+                            disabled={walletConnectLoading}
+                          >
+                            {walletChoices.map((choice) => (
+                              <option key={choice.id} value={choice.id}>
+                                {choice.label}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="hint">Pick provider, then click Connect wallet.</span>
+                        </>
+                      ) : (
+                        <span className="hint">No injected wallet found. Install/use MetaMask, Rabby, or compatible wallet.</span>
+                      )}
+
                       <div className="row wrap">
                         <button
                           className="secondaryButton"
@@ -1082,22 +1125,6 @@ export default function App() {
                           {copiedAddress === walletAccount && walletAccount ? "Copied" : "Copy wallet address"}
                         </button>
                       </div>
-
-                      {walletChoices.length > 1 ? <span className="hint">Choose which wallet to open:</span> : null}
-                      {walletChooserOpen && walletChoices.length > 1 ? (
-                        <div className="row wrap walletChoiceRow">
-                          {walletChoices.map((choice) => (
-                            <button
-                              key={choice.id}
-                              className="secondaryButton"
-                              onClick={() => void connectWallet(choice.id)}
-                              disabled={walletConnectLoading}
-                            >
-                              Open {choice.label}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
 
                       {walletAccounts.length ? (
                         <>
