@@ -17,6 +17,7 @@ const LEGACY_STORAGE_KEY = "localethscan:mvp:v2";
 const DEFAULT_RPC = "http://127.0.0.1:8545";
 const PRIVACY_MODE_ENABLED = true;
 const REDACTED_TOKEN = "[redacted]";
+const CUSTOM_RPC_PRESET_ID = "__custom__";
 const SENSITIVE_RPC_KEYS = [
   "key",
   "api_key",
@@ -49,6 +50,11 @@ type WalletProviderChoice = {
   label: string;
   provider: InjectedProvider;
 };
+type RpcPreset = {
+  id: string;
+  label: string;
+  url: string;
+};
 type ContractUI = {
   fnInputs: Record<string, string[]>;
   tupleDrafts: Record<string, Record<string, string>>;
@@ -60,6 +66,10 @@ type ContractUI = {
   rawTxHash: string;
   rawDecoded: string;
 };
+
+declare const __RPC_PRESET_OPTIONS__: RpcPreset[];
+
+const RPC_PRESET_OPTIONS = __RPC_PRESET_OPTIONS__;
 
 function normalizeAddress(value: string): string {
   return value.trim().toLowerCase();
@@ -402,6 +412,10 @@ export default function App() {
   const [managerMessage, setManagerMessage] = useState("");
 
   const rpcUrlError = useMemo(() => getRpcUrlError(rpcUrl), [rpcUrl]);
+  const selectedRpcPresetId = useMemo(() => {
+    const trimmedDraft = rpcInputDraft.trim();
+    return RPC_PRESET_OPTIONS.find((option) => option.url.trim() === trimmedDraft)?.id ?? CUSTOM_RPC_PRESET_ID;
+  }, [rpcInputDraft]);
   const client = useMemo(
     () => (rpcUrlError ? null : createPublicClient({ transport: http(rpcUrl.trim()) })),
     [rpcUrl, rpcUrlError]
@@ -450,6 +464,13 @@ export default function App() {
     if (next === rpcUrl.trim()) {
       void checkChain();
     }
+  };
+
+  const selectRpcPreset = (presetId: string) => {
+    if (presetId === CUSTOM_RPC_PRESET_ID) return;
+    const preset = RPC_PRESET_OPTIONS.find((option) => option.id === presetId);
+    if (!preset) return;
+    setRpcInputDraft(preset.url);
   };
 
   const setContractState = (id: string, updater: (s: ContractUI) => ContractUI) => {
@@ -899,6 +920,19 @@ export default function App() {
         <h1 className="appTitle">localethscan</h1>
 
         <section className="rpcInline" aria-label="RPC endpoint and status">
+          <div className="rpcPresetRow">
+            <label className="rpcPresetLabel" htmlFor="rpc-preset-select">
+              Preset
+            </label>
+            <select id="rpc-preset-select" value={selectedRpcPresetId} onChange={(e) => selectRpcPreset(e.target.value)}>
+              {RPC_PRESET_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+              <option value={CUSTOM_RPC_PRESET_ID}>Custom / manual</option>
+            </select>
+          </div>
           <div className="rpcInlineRow">
             <span className="rpcInlineLabel">RPC</span>
             <input
@@ -919,6 +953,7 @@ export default function App() {
               Check
             </button>
           </div>
+          <div className="hint">Choose a preset from the repo `.env` or paste any custom RPC URL, then use Apply or Check.</div>
           <div className="status rpcInlineStatus">
             {chainStatus.connected ? (
               <>

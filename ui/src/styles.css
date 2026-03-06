@@ -120,6 +120,17 @@ body {
   gap: 6px;
 }
 
+.rpcPresetRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.rpcPresetLabel {
+  white-space: nowrap;
+}
+
 .rpcInlineRow {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
@@ -591,6 +602,7 @@ code {
   }
 
   .rpcInlineRow,
+  .rpcPresetRow,
   .managerFieldGrid,
   .modeToggleGroup {
     grid-template-columns: 1fr;
