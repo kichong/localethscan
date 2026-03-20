@@ -51,6 +51,8 @@ type InjectedProvider = {
   isMetaMask?: boolean;
   isRabby?: boolean;
   isZerion?: boolean;
+  on?: (event: string, listener: (...args: unknown[]) => void) => void;
+  removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
   providerInfo?: Partial<Eip6963ProviderInfo>;
 };
 type Eip6963ProviderDetail = {
@@ -147,6 +149,24 @@ function redactRpcUrlForPrivacy(value: string): string {
     return changed ? url.toString() : trimmed;
   } catch {
     return trimmed;
+  }
+}
+
+function parseChainId(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = trimmed.startsWith("0x") ? Number.parseInt(trimmed, 16) : Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function requestInjectedWalletChainId(provider: InjectedProvider): Promise<number | null> {
+  try {
+    return parseChainId(await provider.request({ method: "eth_chainId" }));
+  } catch {
+    return null;
   }
 }
 
@@ -481,6 +501,7 @@ export default function App() {
   const [walletConnectLoading, setWalletConnectLoading] = useState(false);
   const [walletAccount, setWalletAccount] = useState("");
   const [walletBalance, setWalletBalance] = useState("");
+  const [walletChainId, setWalletChainId] = useState<number | null>(null);
   const [walletError, setWalletError] = useState("");
   const [announcedWalletProviders, setAnnouncedWalletProviders] = useState<Eip6963ProviderDetail[]>([]);
   const [fromAddress, setFromAddress] = useState("");
@@ -544,6 +565,11 @@ export default function App() {
     [rpcUrl, rpcUrlError]
   );
   const walletChoices = useMemo(() => getInjectedWalletChoices(announcedWalletProviders), [announcedWalletProviders]);
+  const walletNetworkWarning = useMemo(() => {
+    if (!walletAccount || walletChainId == null || !chainStatus.connected || chainStatus.chainId == null) return "";
+    if (walletChainId === chainStatus.chainId) return "";
+    return `Wallet network mismatch: connected wallet is on chain ${walletChainId}, but the current RPC is on chain ${chainStatus.chainId}. Switch the wallet network or change the RPC before sending a transaction.`;
+  }, [walletAccount, walletChainId, chainStatus.connected, chainStatus.chainId]);
   const selectedWalletProviderId =
     (walletTargetProviderId && walletChoices.some((choice) => choice.id === walletTargetProviderId)
       ? walletTargetProviderId
@@ -668,6 +694,36 @@ export default function App() {
     };
     void loadWalletBalance();
   }, [walletAccount, client]);
+
+  useEffect(() => {
+    if (!walletProviderId) {
+      setWalletChainId(null);
+      return;
+    }
+    const selectedProvider = getWalletChoice(walletProviderId);
+    if (!selectedProvider) {
+      setWalletChainId(null);
+      return;
+    }
+
+    let cancelled = false;
+    const syncWalletChainId = async () => {
+      const nextChainId = await requestInjectedWalletChainId(selectedProvider.provider);
+      if (!cancelled) setWalletChainId(nextChainId);
+    };
+
+    const onChainChanged = (nextChainId: unknown) => {
+      if (cancelled) return;
+      setWalletChainId(parseChainId(nextChainId));
+    };
+
+    void syncWalletChainId();
+    selectedProvider.provider.on?.("chainChanged", onChainChanged);
+    return () => {
+      cancelled = true;
+      selectedProvider.provider.removeListener?.("chainChanged", onChainChanged);
+    };
+  }, [walletProviderId, walletChoices]);
 
   const clearManagerStatus = () => {
     setManagerError("");
@@ -805,6 +861,7 @@ export default function App() {
     setWalletAccounts([]);
     setWalletAccount("");
     setWalletBalance("");
+    setWalletChainId(null);
     setWalletError("");
     setWriteMode(hasRpcAccounts ? "local" : "wallet");
     if (minimizeWalletPanel) {
@@ -835,11 +892,13 @@ export default function App() {
       const addresses = (await walletClient.requestAddresses())
         .map(normalizeAddress)
         .filter(Boolean);
+      const connectedWalletChainId = await requestInjectedWalletChainId(selectedProvider.provider);
       if (!addresses.length) throw new Error("Wallet did not return an address.");
       setWalletProviderId(selectedProvider.id);
       setWalletProviderLabel(selectedProvider.label);
       setWalletAccounts(addresses);
       setWalletAccount((prev) => (prev && addresses.includes(prev) ? prev : addresses[0]));
+      setWalletChainId(connectedWalletChainId);
       setWalletTargetProviderId(selectedProvider.id);
       setWriteMode("wallet");
     } catch (error) {
@@ -921,6 +980,21 @@ export default function App() {
         const walletClient = createWalletClient({
           transport: custom(selectedProvider.provider as any)
         });
+        const currentWalletChainId = await requestInjectedWalletChainId(selectedProvider.provider);
+        setWalletChainId(currentWalletChainId);
+        if (
+          currentWalletChainId != null &&
+          chainStatus.connected &&
+          chainStatus.chainId != null &&
+          currentWalletChainId !== chainStatus.chainId
+        ) {
+          const shouldContinue = window.confirm(
+            `Wallet network mismatch.\n\nConnected wallet chain: ${currentWalletChainId}\nCurrent RPC chain: ${chainStatus.chainId}\n\nPress OK to continue anyway, or Cancel to stop this transaction.`
+          );
+          if (!shouldContinue) {
+            throw new Error("Transaction cancelled because the connected wallet is on a different network than the current RPC.");
+          }
+        }
         txHash = (await walletClient.request({
           method: "eth_sendTransaction",
           params: [
@@ -1300,8 +1374,12 @@ export default function App() {
                       )}
                       <span className="hint">Wallet provider: {walletProviderLabel || "Not selected"}</span>
                       <span className="hint">
+                        Wallet chain ID: {walletAccount ? (walletChainId ?? "Unknown") : "-"}
+                      </span>
+                      <span className="hint">
                         Wallet balance (via current RPC): {walletAccount ? `${walletBalance || "..."} ETH` : "-"}
                       </span>
+                      {walletNetworkWarning ? <div className="errorBox">{walletNetworkWarning}</div> : null}
                       {walletError ? <div className="errorBox">{walletError}</div> : null}
                     </>
                   ) : (
