@@ -39,11 +39,23 @@ type FunctionResult = { loading?: boolean; output?: string; error?: string };
 type WriteResult = { loading?: boolean; txHash?: string; receiptSummary?: string; decodedLogs?: string; error?: string };
 type ContractEntry = { id: string; name: string; address: string; abiText: string; abi: Abi };
 type WalletProviderId = string;
+type Eip6963ProviderInfo = {
+  uuid: string;
+  name: string;
+  icon: string;
+  rdns: string;
+};
 type InjectedProvider = {
   request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown>;
   providers?: InjectedProvider[];
   isMetaMask?: boolean;
   isRabby?: boolean;
+  isZerion?: boolean;
+  providerInfo?: Partial<Eip6963ProviderInfo>;
+};
+type Eip6963ProviderDetail = {
+  info: Eip6963ProviderInfo;
+  provider: InjectedProvider;
 };
 type WalletProviderChoice = {
   id: WalletProviderId;
@@ -138,35 +150,106 @@ function redactRpcUrlForPrivacy(value: string): string {
   }
 }
 
-function getInjectedWalletChoices(): WalletProviderChoice[] {
+function normalizeWalletLabel(label?: string): string {
+  const trimmed = label?.trim() ?? "";
+  if (!trimmed) return "";
+  const normalized = trimmed.toLowerCase();
+  if (normalized.includes("zerion")) return "Zerion";
+  if (normalized.includes("rabby")) return "Rabby";
+  if (normalized.includes("metamask")) return "MetaMask";
+  return trimmed;
+}
+
+function getInjectedWalletLabel(provider: InjectedProvider, info?: Partial<Eip6963ProviderInfo>): string {
+  const announcedLabel = normalizeWalletLabel(info?.name ?? provider.providerInfo?.name);
+  const announcedRdns = (info?.rdns ?? provider.providerInfo?.rdns ?? "").trim().toLowerCase();
+  if (provider.isZerion || announcedLabel === "Zerion" || announcedRdns.includes("zerion")) return "Zerion";
+  if (provider.isRabby || announcedLabel === "Rabby" || announcedRdns.includes("rabby")) return "Rabby";
+  if (provider.isMetaMask || announcedLabel === "MetaMask" || announcedRdns.includes("metamask")) return "MetaMask";
+  return announcedLabel || "Injected wallet";
+}
+
+function getInjectedWalletFingerprint(provider: InjectedProvider, info?: Partial<Eip6963ProviderInfo>): string | null {
+  const uuid = info?.uuid?.trim().toLowerCase();
+  if (uuid) return `eip6963-${uuid}`;
+  const rdns = (info?.rdns ?? provider.providerInfo?.rdns ?? "").trim().toLowerCase();
+  if (rdns) return `rdns-${rdns}`;
+  if (provider.isZerion) return "flag-zerion";
+  if (provider.isRabby) return "flag-rabby";
+  if (provider.isMetaMask) return "flag-metamask";
+  return null;
+}
+
+function getInjectedWalletPriority(provider: InjectedProvider, info?: Partial<Eip6963ProviderInfo>): number {
+  let score = 0;
+  if (info?.uuid) score += 100;
+  if (info?.rdns || provider.providerInfo?.rdns) score += 20;
+  if (info?.name || provider.providerInfo?.name) score += 10;
+  if (provider.isZerion || provider.isRabby || provider.isMetaMask) score += 5;
+  return score;
+}
+
+function getInjectedWalletChoices(announcedProviders: Eip6963ProviderDetail[] = []): WalletProviderChoice[] {
   if (typeof window === "undefined") return [];
   const root = (window as any).ethereum as InjectedProvider | undefined;
   const rabby = (window as any).rabby as InjectedProvider | undefined;
-  const candidates: InjectedProvider[] = [];
-  const pushProvider = (provider?: InjectedProvider) => {
+  const candidates: Array<WalletProviderChoice & { priority: number }> = [];
+  const seenFingerprints = new Set<string>();
+  const pushProvider = (provider?: InjectedProvider, info?: Partial<Eip6963ProviderInfo>) => {
     if (!provider || typeof provider.request !== "function") return;
-    if (candidates.includes(provider)) return;
-    candidates.push(provider);
+    const label = getInjectedWalletLabel(provider, info);
+    const priority = getInjectedWalletPriority(provider, info);
+    const fingerprint = getInjectedWalletFingerprint(provider, info);
+    if (fingerprint) {
+      if (seenFingerprints.has(fingerprint)) return;
+      seenFingerprints.add(fingerprint);
+    } else if (candidates.some((choice) => choice.provider === provider)) {
+      return;
+    }
+    if (label !== "Injected wallet") {
+      const existingIndex = candidates.findIndex((choice) => choice.label === label);
+      if (existingIndex >= 0) {
+        if (priority <= candidates[existingIndex].priority) return;
+        candidates[existingIndex] = {
+          id: fingerprint ?? candidates[existingIndex].id,
+          label,
+          provider,
+          priority
+        };
+        return;
+      }
+    }
+    const baseId = fingerprint ?? `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "injected-wallet"}-${candidates.length + 1}`;
+    candidates.push({
+      id: baseId,
+      label,
+      provider,
+      priority
+    });
   };
 
-  pushProvider(root);
+  // Prefer EIP-6963 provider announcements because window.ethereum provider flags are inconsistent
+  // when multiple browser wallet extensions are installed at the same time.
+  for (const announced of announcedProviders) {
+    pushProvider(announced.provider, announced.info);
+  }
+
+  pushProvider(root, root?.providerInfo);
   if (Array.isArray(root?.providers)) {
-    for (const provider of root.providers) pushProvider(provider);
+    for (const provider of root.providers) pushProvider(provider, provider.providerInfo);
   }
   // Some browser setups expose Rabby on `window.rabby` instead of `window.ethereum.providers`.
-  pushProvider(rabby);
+  pushProvider(rabby, rabby?.providerInfo);
 
   const labelCounts = new Map<string, number>();
-  return candidates.map((provider) => {
-    const baseLabel = provider.isRabby ? "Rabby" : provider.isMetaMask ? "MetaMask" : "Injected wallet";
-    const nextCount = (labelCounts.get(baseLabel) ?? 0) + 1;
-    labelCounts.set(baseLabel, nextCount);
-    const idBase = baseLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const labelSuffix = nextCount > 1 ? ` ${nextCount}` : "";
+  return candidates.map((choice) => {
+    const nextCount = (labelCounts.get(choice.label) ?? 0) + 1;
+    labelCounts.set(choice.label, nextCount);
+    const labelSuffix = choice.label === "Injected wallet" && nextCount > 1 ? ` ${nextCount}` : "";
     return {
-      id: `${idBase}-${nextCount}`,
-      label: `${baseLabel}${labelSuffix}`,
-      provider
+      id: choice.id,
+      label: `${choice.label}${labelSuffix}`,
+      provider: choice.provider
     };
   });
 }
@@ -399,6 +482,7 @@ export default function App() {
   const [walletAccount, setWalletAccount] = useState("");
   const [walletBalance, setWalletBalance] = useState("");
   const [walletError, setWalletError] = useState("");
+  const [announcedWalletProviders, setAnnouncedWalletProviders] = useState<Eip6963ProviderDetail[]>([]);
   const [fromAddress, setFromAddress] = useState("");
   const [copiedAddress, setCopiedAddress] = useState("");
   const [contracts, setContracts] = useState<ContractEntry[]>(initial.contracts);
@@ -411,6 +495,45 @@ export default function App() {
   const [managerError, setManagerError] = useState("");
   const [managerMessage, setManagerMessage] = useState("");
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onAnnounceProvider = (event: Event) => {
+      const detail = (event as CustomEvent<Eip6963ProviderDetail>).detail;
+      if (!detail?.provider || typeof detail.provider.request !== "function" || !detail.info) return;
+
+      setAnnouncedWalletProviders((previous) => {
+        const fingerprint = getInjectedWalletFingerprint(detail.provider, detail.info);
+        if (!fingerprint) {
+          return previous.some((item) => item.provider === detail.provider) ? previous : [...previous, detail];
+        }
+
+        const existingIndex = previous.findIndex(
+          (item) => getInjectedWalletFingerprint(item.provider, item.info) === fingerprint
+        );
+        if (existingIndex < 0) return [...previous, detail];
+
+        const existing = previous[existingIndex];
+        if (
+          existing.provider === detail.provider &&
+          existing.info.uuid === detail.info.uuid &&
+          existing.info.name === detail.info.name &&
+          existing.info.rdns === detail.info.rdns
+        ) {
+          return previous;
+        }
+
+        const next = [...previous];
+        next[existingIndex] = detail;
+        return next;
+      });
+    };
+
+    window.addEventListener("eip6963:announceProvider", onAnnounceProvider as EventListener);
+    window.dispatchEvent(new Event("eip6963:requestProvider"));
+    return () => window.removeEventListener("eip6963:announceProvider", onAnnounceProvider as EventListener);
+  }, []);
+
   const rpcUrlError = useMemo(() => getRpcUrlError(rpcUrl), [rpcUrl]);
   const selectedRpcPresetId = useMemo(() => {
     const trimmedDraft = rpcInputDraft.trim();
@@ -420,7 +543,7 @@ export default function App() {
     () => (rpcUrlError ? null : createPublicClient({ transport: http(rpcUrl.trim()) })),
     [rpcUrl, rpcUrlError]
   );
-  const walletChoices = getInjectedWalletChoices();
+  const walletChoices = useMemo(() => getInjectedWalletChoices(announcedWalletProviders), [announcedWalletProviders]);
   const selectedWalletProviderId =
     (walletTargetProviderId && walletChoices.some((choice) => choice.id === walletTargetProviderId)
       ? walletTargetProviderId
@@ -670,7 +793,7 @@ export default function App() {
 
   const getWalletChoice = (
     providerId?: WalletProviderId | "",
-    choices: WalletProviderChoice[] = getInjectedWalletChoices()
+    choices: WalletProviderChoice[] = walletChoices
   ): WalletProviderChoice | undefined => {
     if (providerId) return choices.find((choice) => choice.id === providerId);
     return choices[0];
@@ -691,9 +814,9 @@ export default function App() {
 
   const connectWallet = async (providerId?: WalletProviderId) => {
     setWalletError("");
-    const available = getInjectedWalletChoices();
+    const available = walletChoices;
     if (!available.length) {
-      setWalletError("No injected wallet found. Install/use MetaMask, Rabby, or compatible wallet.");
+      setWalletError("No injected wallet found. Install/use Zerion, MetaMask, Rabby, or another compatible wallet.");
       return;
     }
     try {
@@ -1130,7 +1253,7 @@ export default function App() {
                           <span className="hint">Pick provider, then click Connect wallet.</span>
                         </>
                       ) : (
-                        <span className="hint">No injected wallet found. Install/use MetaMask, Rabby, or compatible wallet.</span>
+                        <span className="hint">No injected wallet found. Install/use Zerion, MetaMask, Rabby, or another compatible wallet.</span>
                       )}
 
                       <div className="row wrap">
