@@ -24,7 +24,7 @@
   --ok-border: #8bd6b4;
   --error-bg: #fff0ef;
   --error-border: #efb7b3;
-  --shadow: 0 16px 30px rgba(28, 62, 96, 0.09);
+  --shadow: 0 8px 18px rgba(28, 62, 96, 0.07);
   --control-accent: #1d6ca4;
   --contract-accent: #14715f;
   --rpc-accent: #2c7dbb;
@@ -56,7 +56,7 @@ body[data-theme="dark"] {
   --ok-border: #2f7159;
   --error-bg: #3b2121;
   --error-border: #764141;
-  --shadow: 0 16px 30px rgba(3, 9, 18, 0.45);
+  --shadow: 0 8px 20px rgba(3, 9, 18, 0.38);
   --control-accent: #4ba3eb;
   --contract-accent: #56c8ae;
   --rpc-accent: #61b4ff;
@@ -79,10 +79,7 @@ body {
   padding: 0;
   color: var(--text);
   line-height: 1.45;
-  background:
-    radial-gradient(1000px 460px at -10% -20%, #9cc3df55, transparent 72%),
-    radial-gradient(800px 440px at 100% 0%, #88c6bd44, transparent 68%),
-    linear-gradient(180deg, var(--bg), var(--bg-alt));
+  background: linear-gradient(180deg, var(--bg), var(--bg-alt));
 }
 
 .app {
@@ -100,7 +97,7 @@ body {
   align-items: start;
   gap: 14px;
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: 8px;
   background: var(--panel);
   box-shadow: var(--shadow);
   padding: 16px;
@@ -193,7 +190,7 @@ body {
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 14px;
   display: grid;
   gap: 10px;
@@ -206,23 +203,17 @@ body {
 
 .rpcPanel {
   border-top-color: color-mix(in srgb, var(--rpc-accent) 62%, var(--border));
-  background:
-    linear-gradient(160deg, color-mix(in srgb, var(--rpc-accent) 12%, transparent), transparent 58%),
-    var(--panel);
+  background: var(--panel);
 }
 
 .managerPanel {
   border-top-color: color-mix(in srgb, var(--manager-accent) 52%, var(--border));
-  background:
-    linear-gradient(160deg, color-mix(in srgb, var(--manager-accent) 10%, transparent), transparent 60%),
-    var(--panel);
+  background: var(--panel);
 }
 
 .senderPanel {
   border-top-color: color-mix(in srgb, var(--sender-accent) 60%, var(--border));
-  background:
-    linear-gradient(160deg, color-mix(in srgb, var(--sender-accent) 12%, transparent), transparent 58%),
-    var(--panel);
+  background: var(--panel);
 }
 
 .deployedZone {
@@ -236,7 +227,7 @@ body {
 .innerPanel {
   background: var(--panel-soft);
   border: 1px solid var(--border-soft);
-  border-radius: 14px;
+  border-radius: 8px;
   padding: 10px;
   display: grid;
   gap: 10px;
@@ -348,7 +339,7 @@ body {
   display: grid;
   gap: 4px;
   border: 1px dashed var(--border);
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 8px;
   background: color-mix(in srgb, var(--panel-soft) 84%, transparent);
 }
@@ -384,7 +375,7 @@ body {
 
 .okBox,
 .errorBox {
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 8px 10px;
   white-space: pre-wrap;
   border: 1px solid transparent;
@@ -404,7 +395,7 @@ body {
 
 .fnCard {
   border: 1px solid var(--border-soft);
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 10px;
   display: grid;
   gap: 8px;
@@ -421,7 +412,7 @@ body {
   display: grid;
   gap: 8px;
   border: 1px dashed var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 8px;
 }
 
@@ -468,7 +459,7 @@ input,
 textarea,
 select {
   width: 100%;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid var(--input-border);
   padding: 9px 10px;
   background: var(--panel);
@@ -492,7 +483,7 @@ textarea {
 
 button {
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--button-bg);
   color: var(--button-text);
   padding: 8px 12px;
@@ -535,7 +526,7 @@ button:disabled {
   min-width: 36px;
   height: 36px;
   padding: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   font-family: var(--font-mono);
   font-size: 1rem;
   line-height: 1;
@@ -548,7 +539,7 @@ button:disabled {
 pre {
   margin: 0;
   border: 1px solid var(--border-soft);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--panel-soft);
   padding: 8px;
   overflow-x: auto;

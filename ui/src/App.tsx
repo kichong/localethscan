@@ -5,484 +5,40 @@ import {
   createPublicClient,
   decodeEventLog,
   encodeFunctionData,
-  formatEther,
   http,
-  isAddress,
   toHex
 } from "viem";
-import type { Abi, AbiParameter, Address, Hex } from "viem";
-
-const STORAGE_KEY = "localethscan:workspace:v2";
-const LEGACY_STORAGE_KEY = "localethscan:mvp:v2";
-const DEFAULT_RPC = "http://127.0.0.1:8545";
-const PRIVACY_MODE_ENABLED = true;
-const REDACTED_TOKEN = "[redacted]";
-const CUSTOM_RPC_PRESET_ID = "__custom__";
-const SENSITIVE_RPC_KEYS = [
-  "key",
-  "api_key",
-  "apikey",
-  "token",
-  "access_token",
-  "secret",
-  "client_secret",
-  "password",
-  "signature",
-  "sig",
-  "auth",
-  "authorization"
-];
-
-type AbiFunction = Extract<Abi[number], { type: "function" }>;
-type ChainStatus = { connected: boolean; chainId?: number; latestBlock?: bigint; error?: string };
-type FunctionResult = { loading?: boolean; output?: string; error?: string };
-type WriteResult = { loading?: boolean; txHash?: string; receiptSummary?: string; decodedLogs?: string; error?: string };
-type ContractEntry = { id: string; name: string; address: string; abiText: string; abi: Abi };
-type WalletProviderId = string;
-type Eip6963ProviderInfo = {
-  uuid: string;
-  name: string;
-  icon: string;
-  rdns: string;
-};
-type InjectedProvider = {
-  request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown>;
-  providers?: InjectedProvider[];
-  isMetaMask?: boolean;
-  isRabby?: boolean;
-  isZerion?: boolean;
-  on?: (event: string, listener: (...args: unknown[]) => void) => void;
-  removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
-  providerInfo?: Partial<Eip6963ProviderInfo>;
-};
-type Eip6963ProviderDetail = {
-  info: Eip6963ProviderInfo;
-  provider: InjectedProvider;
-};
-type WalletProviderChoice = {
-  id: WalletProviderId;
-  label: string;
-  provider: InjectedProvider;
-};
-type RpcPreset = {
-  id: string;
-  label: string;
-  url: string;
-};
-type ContractUI = {
-  fnInputs: Record<string, string[]>;
-  tupleDrafts: Record<string, Record<string, string>>;
-  payableValueWei: Record<string, string>;
-  readResults: Record<string, FunctionResult>;
-  writeResults: Record<string, WriteResult>;
-  rawTopics: string;
-  rawData: string;
-  rawTxHash: string;
-  rawDecoded: string;
-};
-
-declare const __RPC_PRESET_OPTIONS__: RpcPreset[];
-
-const RPC_PRESET_OPTIONS = __RPC_PRESET_OPTIONS__;
-
-function normalizeAddress(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function isAddressLike(value: string): boolean {
-  return isAddress(value as Address, { strict: false });
-}
-
-function getRpcUrlError(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) return "RPC endpoint is required.";
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return "RPC endpoint must start with http:// or https://.";
-    }
-    return null;
-  } catch {
-    return "RPC endpoint URL is invalid.";
-  }
-}
-
-function redactRpcUrlForPrivacy(value: string): string {
-  if (!PRIVACY_MODE_ENABLED) return value.trim();
-  const trimmed = value.trim();
-  if (!trimmed) return trimmed;
-  try {
-    const url = new URL(trimmed);
-    let changed = false;
-
-    if (url.username) {
-      url.username = REDACTED_TOKEN;
-      changed = true;
-    }
-    if (url.password) {
-      url.password = REDACTED_TOKEN;
-      changed = true;
-    }
-
-    for (const key of Array.from(url.searchParams.keys())) {
-      const normalizedKey = key.toLowerCase();
-      if (SENSITIVE_RPC_KEYS.some((sensitive) => normalizedKey.includes(sensitive))) {
-        url.searchParams.set(key, REDACTED_TOKEN);
-        changed = true;
-      }
-    }
-
-    const segments = url.pathname.split("/");
-    for (let i = 0; i < segments.length; i += 1) {
-      const segment = segments[i];
-      if (!segment) continue;
-      const prev = (segments[i - 1] ?? "").toLowerCase();
-      const looksLikeLongToken = /^[A-Za-z0-9_-]{20,}$/.test(segment);
-      const previousSuggestsSecret = /^(v2|v3|api|rpc|key|token)$/.test(prev);
-      if (looksLikeLongToken && previousSuggestsSecret) {
-        segments[i] = REDACTED_TOKEN;
-        changed = true;
-      }
-    }
-    if (changed) url.pathname = segments.join("/");
-
-    return changed ? url.toString() : trimmed;
-  } catch {
-    return trimmed;
-  }
-}
-
-function parseChainId(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "bigint") return Number(value);
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = trimmed.startsWith("0x") ? Number.parseInt(trimmed, 16) : Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-async function requestInjectedWalletChainId(provider: InjectedProvider): Promise<number | null> {
-  try {
-    return parseChainId(await provider.request({ method: "eth_chainId" }));
-  } catch {
-    return null;
-  }
-}
-
-function normalizeWalletLabel(label?: string): string {
-  const trimmed = label?.trim() ?? "";
-  if (!trimmed) return "";
-  const normalized = trimmed.toLowerCase();
-  if (normalized.includes("zerion")) return "Zerion";
-  if (normalized.includes("rabby")) return "Rabby";
-  if (normalized.includes("metamask")) return "MetaMask";
-  return trimmed;
-}
-
-function getInjectedWalletLabel(provider: InjectedProvider, info?: Partial<Eip6963ProviderInfo>): string {
-  const announcedLabel = normalizeWalletLabel(info?.name ?? provider.providerInfo?.name);
-  const announcedRdns = (info?.rdns ?? provider.providerInfo?.rdns ?? "").trim().toLowerCase();
-  if (provider.isZerion || announcedLabel === "Zerion" || announcedRdns.includes("zerion")) return "Zerion";
-  if (provider.isRabby || announcedLabel === "Rabby" || announcedRdns.includes("rabby")) return "Rabby";
-  if (provider.isMetaMask || announcedLabel === "MetaMask" || announcedRdns.includes("metamask")) return "MetaMask";
-  return announcedLabel || "Injected wallet";
-}
-
-function getInjectedWalletFingerprint(provider: InjectedProvider, info?: Partial<Eip6963ProviderInfo>): string | null {
-  const uuid = info?.uuid?.trim().toLowerCase();
-  if (uuid) return `eip6963-${uuid}`;
-  const rdns = (info?.rdns ?? provider.providerInfo?.rdns ?? "").trim().toLowerCase();
-  if (rdns) return `rdns-${rdns}`;
-  if (provider.isZerion) return "flag-zerion";
-  if (provider.isRabby) return "flag-rabby";
-  if (provider.isMetaMask) return "flag-metamask";
-  return null;
-}
-
-function getInjectedWalletPriority(provider: InjectedProvider, info?: Partial<Eip6963ProviderInfo>): number {
-  let score = 0;
-  if (info?.uuid) score += 100;
-  if (info?.rdns || provider.providerInfo?.rdns) score += 20;
-  if (info?.name || provider.providerInfo?.name) score += 10;
-  if (provider.isZerion || provider.isRabby || provider.isMetaMask) score += 5;
-  return score;
-}
-
-function getInjectedWalletChoices(announcedProviders: Eip6963ProviderDetail[] = []): WalletProviderChoice[] {
-  if (typeof window === "undefined") return [];
-  const root = (window as any).ethereum as InjectedProvider | undefined;
-  const rabby = (window as any).rabby as InjectedProvider | undefined;
-  const candidates: Array<WalletProviderChoice & { priority: number }> = [];
-  const seenFingerprints = new Set<string>();
-  const pushProvider = (provider?: InjectedProvider, info?: Partial<Eip6963ProviderInfo>) => {
-    if (!provider || typeof provider.request !== "function") return;
-    const label = getInjectedWalletLabel(provider, info);
-    const priority = getInjectedWalletPriority(provider, info);
-    const fingerprint = getInjectedWalletFingerprint(provider, info);
-    if (fingerprint) {
-      if (seenFingerprints.has(fingerprint)) return;
-      seenFingerprints.add(fingerprint);
-    } else if (candidates.some((choice) => choice.provider === provider)) {
-      return;
-    }
-    if (label !== "Injected wallet") {
-      const existingIndex = candidates.findIndex((choice) => choice.label === label);
-      if (existingIndex >= 0) {
-        if (priority <= candidates[existingIndex].priority) return;
-        candidates[existingIndex] = {
-          id: fingerprint ?? candidates[existingIndex].id,
-          label,
-          provider,
-          priority
-        };
-        return;
-      }
-    }
-    const baseId = fingerprint ?? `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "injected-wallet"}-${candidates.length + 1}`;
-    candidates.push({
-      id: baseId,
-      label,
-      provider,
-      priority
-    });
-  };
-
-  // Prefer EIP-6963 provider announcements because window.ethereum provider flags are inconsistent
-  // when multiple browser wallet extensions are installed at the same time.
-  for (const announced of announcedProviders) {
-    pushProvider(announced.provider, announced.info);
-  }
-
-  pushProvider(root, root?.providerInfo);
-  if (Array.isArray(root?.providers)) {
-    for (const provider of root.providers) pushProvider(provider, provider.providerInfo);
-  }
-  // Some browser setups expose Rabby on `window.rabby` instead of `window.ethereum.providers`.
-  pushProvider(rabby, rabby?.providerInfo);
-
-  const labelCounts = new Map<string, number>();
-  return candidates.map((choice) => {
-    const nextCount = (labelCounts.get(choice.label) ?? 0) + 1;
-    labelCounts.set(choice.label, nextCount);
-    const labelSuffix = choice.label === "Injected wallet" && nextCount > 1 ? ` ${nextCount}` : "";
-    return {
-      id: choice.id,
-      label: `${choice.label}${labelSuffix}`,
-      provider: choice.provider
-    };
-  });
-}
-
-function parseAbiText(input: string): Abi {
-  const parsed = JSON.parse(input);
-  const maybeAbi = Array.isArray(parsed) ? parsed : parsed?.abi;
-  if (!Array.isArray(maybeAbi)) throw new Error("ABI must be an array or object with abi array.");
-  return maybeAbi as Abi;
-}
-
-function normalizeValue(value: unknown): unknown {
-  if (typeof value === "bigint") return value.toString();
-  if (Array.isArray(value)) return value.map(normalizeValue);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, normalizeValue(v)]));
-  }
-  if (typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value)) return normalizeAddress(value);
-  return value;
-}
-
-function toPrintable(value: unknown): string {
-  return JSON.stringify(normalizeValue(value), null, 2) ?? String(value);
-}
-
-function formatEthBalance(wei: bigint): string {
-  const value = formatEther(wei);
-  const [whole, fraction = ""] = value.split(".");
-  const trimmed = fraction.slice(0, 4).replace(/0+$/, "");
-  return trimmed ? `${whole}.${trimmed}` : whole;
-}
-
-function getFunctionSignature(fn: AbiFunction): string {
-  return `${fn.name}(${(fn.inputs ?? []).map((i) => i.type).join(",")})`;
-}
-
-function coerceAbiValue(param: AbiParameter, value: unknown): unknown {
-  const type = param.type;
-  if (type.endsWith("[]")) {
-    if (!Array.isArray(value)) throw new Error(`Expected JSON array for ${type}.`);
-    const child: AbiParameter = { ...param, type: type.slice(0, -2) };
-    return value.map((item) => coerceAbiValue(child, item));
-  }
-  if (type.startsWith("tuple")) {
-    const comps = "components" in param ? param.components ?? [] : [];
-    if (Array.isArray(value)) return comps.map((c, i) => coerceAbiValue(c, value[i]));
-    if (value && typeof value === "object") {
-      const rec = value as Record<string, unknown>;
-      return comps.map((c) => coerceAbiValue(c, rec[c.name]));
-    }
-    throw new Error(`Expected tuple JSON for ${type}.`);
-  }
-  if (type.startsWith("uint") || type.startsWith("int")) return BigInt(value as string);
-  if (type === "bool") {
-    if (typeof value === "boolean") return value;
-    if (typeof value === "string" && value.toLowerCase() === "true") return true;
-    if (typeof value === "string" && value.toLowerCase() === "false") return false;
-    throw new Error("Expected true/false.");
-  }
-  if (type === "address") {
-    if (typeof value !== "string" || !isAddressLike(value)) throw new Error("Invalid address input.");
-    return normalizeAddress(value);
-  }
-  return value;
-}
-
-function parseArgFromText(param: AbiParameter, rawValue: string): unknown {
-  const trimmed = rawValue.trim();
-  if (param.type.endsWith("[]") || param.type.startsWith("tuple")) {
-    if (!trimmed) throw new Error(`Input required for ${param.type}.`);
-    return coerceAbiValue(param, JSON.parse(trimmed));
-  }
-  return coerceAbiValue(param, trimmed);
-}
-
-function parseTopicsInput(input: string): Hex[] {
-  const trimmed = input.trim();
-  if (!trimmed) return [];
-  if (trimmed.startsWith("[")) {
-    const parsed = JSON.parse(trimmed);
-    if (!Array.isArray(parsed)) throw new Error("Topics must be array.");
-    return parsed as Hex[];
-  }
-  return trimmed.split(/[\s,]+/).map((i) => i.trim()).filter(Boolean) as Hex[];
-}
-
-function isExpandableTuple(param: AbiParameter): boolean {
-  return param.type.startsWith("tuple") && !param.type.endsWith("[]");
-}
-
-type TupleField = {
-  path: number[];
-  pathText: string;
-  label: string;
-  param: AbiParameter;
-};
-
-function collectTupleFields(
-  param: AbiParameter,
-  label: string,
-  path: number[] = []
-): TupleField[] {
-  if (isExpandableTuple(param)) {
-    const components = "components" in param ? param.components ?? [] : [];
-    return components.flatMap((component, idx) =>
-      collectTupleFields(
-        component,
-        `${label}.${component.name || `item${idx}`}`,
-        [...path, idx]
-      )
-    );
-  }
-  return [{ path, pathText: path.join("."), label, param }];
-}
-
-function parseTupleLeafDraft(param: AbiParameter, raw: string): unknown {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  if (param.type.endsWith("[]") || param.type.startsWith("tuple")) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return raw;
-    }
-  }
-  return raw;
-}
-
-function buildTupleValueFromDraft(
-  param: AbiParameter,
-  argIndex: number,
-  draft: Record<string, string>,
-  path: number[] = []
-): unknown {
-  if (isExpandableTuple(param)) {
-    const components = "components" in param ? param.components ?? [] : [];
-    return components.map((component, idx) =>
-      buildTupleValueFromDraft(component, argIndex, draft, [...path, idx])
-    );
-  }
-  const key = `${argIndex}:${path.join(".")}`;
-  return parseTupleLeafDraft(param, draft[key] ?? "");
-}
-
-function emptyUI(): ContractUI {
-  return {
-    fnInputs: {},
-    tupleDrafts: {},
-    payableValueWei: {},
-    readResults: {},
-    writeResults: {},
-    rawTopics: "",
-    rawData: "0x",
-    rawTxHash: "",
-    rawDecoded: ""
-  };
-}
-
-function toId(): string {
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function loadSession(): {
-  rpcUrl: string;
-  darkMode: boolean;
-  collapsed: Record<string, boolean>;
-  contracts: ContractEntry[];
-} {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!raw) return { rpcUrl: DEFAULT_RPC, darkMode: false, collapsed: {}, contracts: [] };
-    const parsed = JSON.parse(raw);
-    const contracts: ContractEntry[] = [];
-    for (const item of parsed.contracts ?? []) {
-      try {
-        const address = normalizeAddress(item.address);
-        if (!isAddressLike(address)) continue;
-        contracts.push({ id: item.id || toId(), name: item.name || "contract", address, abiText: item.abiText, abi: parseAbiText(item.abiText) });
-      } catch {
-        // ignore invalid persisted contract
-      }
-    }
-    return {
-      rpcUrl: typeof parsed.rpcUrl === "string" ? parsed.rpcUrl : DEFAULT_RPC,
-      darkMode: Boolean(parsed.darkMode),
-      collapsed: parsed.collapsed && typeof parsed.collapsed === "object" ? parsed.collapsed : {},
-      contracts
-    };
-  } catch {
-    return { rpcUrl: DEFAULT_RPC, darkMode: false, collapsed: {}, contracts: [] };
-  }
-}
-
-function parseImportFile(text: string, fileName: string): ContractEntry[] {
-  const parsed = JSON.parse(text);
-  const base = fileName.replace(/\.json$/i, "");
-  const parseOne = (raw: unknown, fallbackName: string): ContractEntry => {
-    const item = raw as Record<string, unknown>;
-    const address = normalizeAddress(String(item.address ?? ""));
-    if (!isAddressLike(address)) throw new Error("Invalid address in import file.");
-    const abi = item.abi;
-    if (!Array.isArray(abi)) throw new Error("Import object needs abi array.");
-    const name = typeof item.name === "string" && item.name.trim() ? item.name.trim() : fallbackName;
-    return { id: toId(), name, address, abiText: JSON.stringify(abi, null, 2), abi: abi as Abi };
-  };
-
-  if (Array.isArray(parsed)) return parsed.map((item, idx) => parseOne(item, `${base}-${idx + 1}`));
-  if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).contracts)) {
-    return (parsed as any).contracts.map((item: unknown, idx: number) => parseOne(item, `${base}-${idx + 1}`));
-  }
-  if (parsed && typeof parsed === "object") return [parseOne(parsed, base)];
-  throw new Error(`${fileName}: unsupported JSON format.`);
-}
+import type { AbiParameter, Address, Hex } from "viem";
+import {
+  buildTupleValueFromDraft,
+  collectTupleFields,
+  formatEthBalance,
+  getFunctionSignature,
+  isAddressLike,
+  isExpandableTuple,
+  normalizeAddress,
+  normalizeValue,
+  parseAbiText,
+  parseArgFromText,
+  parseTopicsInput,
+  toPrintable
+} from "./abi-utils";
+import { CUSTOM_RPC_PRESET_ID, RPC_PRESET_OPTIONS, STORAGE_KEY } from "./config";
+import { getRpcUrlError, redactRpcUrlForPrivacy } from "./rpc";
+import { emptyUI, loadSession, parseImportFile, toId } from "./session";
+import type {
+  AbiFunction,
+  ChainStatus,
+  ContractEntry,
+  ContractUI,
+  Eip6963ProviderDetail,
+  WalletProviderChoice,
+  WalletProviderId
+} from "./types";
+import { getInjectedWalletChoices, getInjectedWalletFingerprint, parseChainId, requestInjectedWalletChainId } from "./wallets";
+import { ContractManagerPanel } from "./components/ContractManagerPanel";
+import { RpcHeader } from "./components/RpcHeader";
+import { WriteSenderPanel } from "./components/WriteSenderPanel";
 
 export default function App() {
   const initial = loadSession();
@@ -1113,322 +669,72 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="pageHeader">
-        <h1 className="appTitle">localethscan</h1>
-
-        <section className="rpcInline" aria-label="RPC endpoint and status">
-          <div className="rpcPresetRow">
-            <label className="rpcPresetLabel" htmlFor="rpc-preset-select">
-              Preset
-            </label>
-            <select id="rpc-preset-select" value={selectedRpcPresetId} onChange={(e) => selectRpcPreset(e.target.value)}>
-              {RPC_PRESET_OPTIONS.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-              <option value={CUSTOM_RPC_PRESET_ID}>Custom / manual</option>
-            </select>
-          </div>
-          <div className="rpcInlineRow">
-            <span className="rpcInlineLabel">RPC</span>
-            <input
-              value={rpcInputDraft}
-              onChange={(e) => setRpcInputDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  applyAndCheckRpc();
-                }
-              }}
-              placeholder={DEFAULT_RPC}
-            />
-            <button className="secondaryButton" onClick={applyRpcDraft}>
-              Apply
-            </button>
-            <button className="secondaryButton" onClick={applyAndCheckRpc}>
-              Check
-            </button>
-          </div>
-          <div className="hint">Choose a preset from the repo `.env` or paste any custom RPC URL, then use Apply or Check.</div>
-          <div className="status rpcInlineStatus">
-            {chainStatus.connected ? (
-              <>
-                <span className="statusPill ok">Connected</span>
-                <span className="statusPill">Chain ID: {chainStatus.chainId}</span>
-                <span className="statusPill">Latest block: {chainStatus.latestBlock?.toString()}</span>
-              </>
-            ) : (
-              <>
-                <span className="statusPill error">Disconnected</span>
-                <span className="statusPill">{chainStatus.error ?? "No response from RPC."}</span>
-              </>
-            )}
-          </div>
-          {rpcUrlError ? <div className="errorBox rpcInlineError">{rpcUrlError}</div> : null}
-        </section>
-
-        <div className="row wrap headerActions">
-          <button className="secondaryButton" onClick={exportWorkspace}>
-            Export Workspace JSON
-          </button>
-          <button className="secondaryButton" onClick={() => setDarkMode((prev) => !prev)}>
-            {darkMode ? "Light mode" : "Dark mode"}
-          </button>
-        </div>
-      </header>
-
+      <RpcHeader
+        selectedRpcPresetId={selectedRpcPresetId}
+        selectRpcPreset={selectRpcPreset}
+        rpcInputDraft={rpcInputDraft}
+        setRpcInputDraft={setRpcInputDraft}
+        applyRpcDraft={applyRpcDraft}
+        applyAndCheckRpc={applyAndCheckRpc}
+        chainStatus={chainStatus}
+        rpcUrlError={rpcUrlError}
+        exportWorkspace={exportWorkspace}
+        darkMode={darkMode}
+        toggleDarkMode={() => setDarkMode((prev) => !prev)}
+      />
       <section className="zoneShell controlsZone">
         <div className="zoneHeader">
           <h2>Workspace Controls</h2>
         </div>
         <div className="controlDeck">
-          <section className="panel controlPanel managerPanel">
-            <div className="panelHeader">
-              <h3>Contract Manager</h3>
-              <button
-                className="secondaryButton"
-                onClick={() => toggleCollapsed("manager")}
-                aria-label={isCollapsed("manager") ? "Expand contract manager" : "Collapse contract manager"}
-                title={isCollapsed("manager") ? "Expand contract manager" : "Collapse contract manager"}
-              >
-                {isCollapsed("manager") ? "+" : "-"}
-              </button>
-            </div>
-            {!isCollapsed("manager") ? (
-              <>
-                <div className="innerPanel managerPane">
-                  <h4 className="controlSubhead">Add Single Contract</h4>
-                  <div className="managerFieldGrid">
-                    <div>
-                      <label>Contract name</label>
-                      <input value={contractNameInput} onChange={(e) => setContractNameInput(e.target.value)} placeholder="my-contract" />
-                    </div>
-                    <div>
-                      <label>Contract address (stored lowercase)</label>
-                      <input value={contractAddressInput} onChange={(e) => setContractAddressInput(normalizeAddress(e.target.value))} placeholder="0x..." />
-                    </div>
-                  </div>
-                  <label>ABI JSON</label>
-                  <textarea value={abiTextInput} onChange={(e) => setAbiTextInput(e.target.value)} placeholder="Paste ABI array (or object with abi)" />
-                  <div className="row wrap managerActionRow">
-                    <input type="file" accept=".json,application/json" onChange={onAbiFilePick} />
-                    <button onClick={addSingleContract}>Add Contract</button>
-                  </div>
-                </div>
-
-                <div className="innerPanel managerPane">
-                  <h4 className="controlSubhead">Bulk Import</h4>
-                  <label>Contracts JSON files (multi-select)</label>
-                  <input type="file" accept=".json,application/json" multiple onChange={onImportFiles} />
-                  <small className="hint">Supported: {`{name?, address, abi}`}, {`{contracts:[...]}`}, or array of contract objects.</small>
-                </div>
-
-                {managerError ? <div className="errorBox">{managerError}</div> : null}
-                {managerMessage ? <div className="okBox">{managerMessage}</div> : null}
-              </>
-            ) : null}
-          </section>
-
-          <section className="panel controlPanel senderPanel">
-            <div className="panelHeader">
-              <h3>Write Sender</h3>
-              <button
-                className="secondaryButton"
-                onClick={() => toggleCollapsed("sender")}
-                aria-label={isCollapsed("sender") ? "Expand write sender" : "Collapse write sender"}
-                title={isCollapsed("sender") ? "Expand write sender" : "Collapse write sender"}
-              >
-                {isCollapsed("sender") ? "+" : "-"}
-              </button>
-            </div>
-            {!isCollapsed("sender") ? (
-              <>
-                <span className="hint">
-                  {hasRpcAccounts
-                    ? "Unlocked RPC accounts detected. Use local mode for Anvil/Hardhat writes."
-                    : "No unlocked RPC accounts detected. Wallet mode is active for live/testnet writes."}
-                </span>
-                <label>Write mode</label>
-                <div className="modeToggleGroup" role="tablist" aria-label="Write mode">
-                  <button
-                    type="button"
-                    className={`modeToggle ${effectiveWriteMode === "local" ? "active" : ""}`}
-                    aria-pressed={effectiveWriteMode === "local"}
-                    onClick={() => setWriteMode("local")}
-                    disabled={!hasRpcAccounts}
-                    title={!hasRpcAccounts ? "Current RPC has no unlocked accounts." : "Use eth_accounts sender"}
-                  >
-                    Local unlocked
-                  </button>
-                  <button
-                    type="button"
-                    className={`modeToggle ${effectiveWriteMode === "wallet" ? "active" : ""}`}
-                    aria-pressed={effectiveWriteMode === "wallet"}
-                    onClick={() => setWriteMode("wallet")}
-                  >
-                    Wallet
-                  </button>
-                </div>
-
-                {hasRpcAccounts ? (
-                  <>
-                    <label>Local sender (`eth_accounts` from current RPC)</label>
-                    <select value={fromAddress} onChange={(e) => setFromAddress(normalizeAddress(e.target.value))}>
-                      <option value="">Select sender</option>
-                      {accounts.map((account) => (
-                        <option key={account} value={account}>
-                          {account} ({senderBalances[account] ?? "..."} ETH)
-                        </option>
-                      ))}
-                    </select>
-                    <div className="row wrap senderActionRow">
-                      <button
-                        className="secondaryButton"
-                        onClick={() => void copyAddress(fromAddress)}
-                        disabled={!fromAddress}
-                      >
-                        {copiedAddress === fromAddress && fromAddress ? "Copied" : "Copy local sender"}
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <span className="hint">Current RPC returned no unlocked addresses via `eth_accounts`.</span>
-                )}
-
-                <div className="innerPanel walletPanel">
-                  <div className="panelHeader">
-                    <h3>Wallet Sender (Live/Testnet/Mainnet)</h3>
-                    <button
-                      className="secondaryButton"
-                      onClick={() => toggleCollapsed("walletSender")}
-                      aria-label={isCollapsed("walletSender") ? "Expand wallet sender" : "Collapse wallet sender"}
-                      title={isCollapsed("walletSender") ? "Expand wallet sender" : "Collapse wallet sender"}
-                    >
-                      {isCollapsed("walletSender") ? "+" : "-"}
-                    </button>
-                  </div>
-                  {!isCollapsed("walletSender") ? (
-                    <>
-                      {walletChoices.length ? (
-                        <>
-                          <label>Wallet provider</label>
-                          <select
-                            value={selectedWalletProviderId}
-                            onChange={(e) => setWalletTargetProviderId(e.target.value)}
-                            disabled={walletConnectLoading}
-                          >
-                            {walletChoices.map((choice) => (
-                              <option key={choice.id} value={choice.id}>
-                                {choice.label}
-                              </option>
-                            ))}
-                          </select>
-                          <span className="hint">Pick provider, then click Connect wallet.</span>
-                        </>
-                      ) : (
-                        <span className="hint">No injected wallet found. Install/use Zerion, MetaMask, Rabby, or another compatible wallet.</span>
-                      )}
-
-                      <div className="row wrap">
-                        <button
-                          className="secondaryButton"
-                          onClick={() => void connectWallet()}
-                          disabled={walletConnectLoading}
-                        >
-                          {walletConnectLoading
-                            ? "Connecting..."
-                            : walletAccount
-                              ? "Reconnect wallet"
-                              : "Connect wallet"}
-                        </button>
-                        <button
-                          className="secondaryButton"
-                          onClick={() => clearWalletConnection(true)}
-                          disabled={walletConnectLoading}
-                        >
-                          Disconnect + clear
-                        </button>
-                        <button
-                          className="secondaryButton"
-                          onClick={() => void copyAddress(walletAccount)}
-                          disabled={!walletAccount}
-                        >
-                          {copiedAddress === walletAccount && walletAccount ? "Copied" : "Copy wallet address"}
-                        </button>
-                      </div>
-
-                      {walletAccounts.length ? (
-                        <>
-                          <label>Connected wallet address</label>
-                          <select value={walletAccount} onChange={(e) => setWalletAccount(normalizeAddress(e.target.value))}>
-                            {walletAccounts.map((address) => (
-                              <option key={address} value={address}>
-                                {address}
-                              </option>
-                            ))}
-                          </select>
-                        </>
-                      ) : (
-                        <span className="hint">No wallet address connected yet.</span>
-                      )}
-                      <span className="hint">Wallet provider: {walletProviderLabel || "Not selected"}</span>
-                      <span className="hint">
-                        Wallet chain ID: {walletAccount ? (walletChainId ?? "Unknown") : "-"}
-                      </span>
-                      <span className="hint">
-                        Wallet balance (via current RPC): {walletAccount ? `${walletBalance || "..."} ETH` : "-"}
-                      </span>
-                      {walletNetworkWarning ? <div className="errorBox">{walletNetworkWarning}</div> : null}
-                      {walletError ? <div className="errorBox">{walletError}</div> : null}
-                    </>
-                  ) : (
-                    <span className="hint">Wallet sender minimized.</span>
-                  )}
-                </div>
-
-                <div className="senderSummary">
-                  <span className="hint">Active write sender</span>
-                  <code>{activeSenderAddress || "None selected"}</code>
-                  <span className="hint">
-                    Source: {effectiveWriteMode === "wallet" ? "Wallet" : "Local unlocked RPC sender"}
-                  </span>
-                  <span className="hint">
-                    Balance: {activeSenderAddress ? `${activeSenderBalance || "..."} ETH` : "-"}
-                  </span>
-                  {effectiveWriteMode === "wallet" && !walletAccount ? (
-                    <span className="hint">Connect a wallet before sending write transactions.</span>
-                  ) : null}
-                  {effectiveWriteMode === "local" && !fromAddress ? (
-                    <span className="hint">Pick a local unlocked sender before sending write transactions.</span>
-                  ) : null}
-                </div>
-              </>
-            ) : (
-              <div className="senderSummary senderCollapsedSummary">
-                <span className="hint">Active write sender</span>
-                <code>{activeSenderAddress || "None selected"}</code>
-                <div className="row wrap">
-                  <button
-                    className="secondaryButton"
-                    onClick={() => void copyAddress(activeSenderAddress)}
-                    disabled={!activeSenderAddress}
-                  >
-                    {copiedAddress === activeSenderAddress && activeSenderAddress ? "Copied" : "Copy active sender"}
-                  </button>
-                  <span className="hint">
-                    Source: {effectiveWriteMode === "wallet" ? "Wallet" : "Local unlocked RPC sender"}
-                  </span>
-                  <span className="hint">
-                    Balance: {activeSenderAddress ? `${activeSenderBalance || "..."} ETH` : "-"}
-                  </span>
-                </div>
-              </div>
-            )}
-          </section>
+          <ContractManagerPanel
+            collapsed={isCollapsed("manager")}
+            toggleCollapsed={() => toggleCollapsed("manager")}
+            contractNameInput={contractNameInput}
+            setContractNameInput={setContractNameInput}
+            contractAddressInput={contractAddressInput}
+            setContractAddressInput={setContractAddressInput}
+            abiTextInput={abiTextInput}
+            setAbiTextInput={setAbiTextInput}
+            onAbiFilePick={onAbiFilePick}
+            onImportFiles={onImportFiles}
+            addSingleContract={addSingleContract}
+            managerError={managerError}
+            managerMessage={managerMessage}
+          />
+          <WriteSenderPanel
+            collapsed={isCollapsed("sender")}
+            toggleCollapsed={() => toggleCollapsed("sender")}
+            walletSenderCollapsed={isCollapsed("walletSender")}
+            toggleWalletSenderCollapsed={() => toggleCollapsed("walletSender")}
+            hasRpcAccounts={hasRpcAccounts}
+            effectiveWriteMode={effectiveWriteMode}
+            setWriteMode={setWriteMode}
+            fromAddress={fromAddress}
+            setFromAddress={setFromAddress}
+            accounts={accounts}
+            senderBalances={senderBalances}
+            copyAddress={copyAddress}
+            copiedAddress={copiedAddress}
+            walletChoices={walletChoices}
+            selectedWalletProviderId={selectedWalletProviderId}
+            setWalletTargetProviderId={setWalletTargetProviderId}
+            walletConnectLoading={walletConnectLoading}
+            connectWallet={connectWallet}
+            clearWalletConnection={clearWalletConnection}
+            walletAccounts={walletAccounts}
+            walletAccount={walletAccount}
+            setWalletAccount={setWalletAccount}
+            walletProviderLabel={walletProviderLabel}
+            walletChainId={walletChainId}
+            walletBalance={walletBalance}
+            walletNetworkWarning={walletNetworkWarning}
+            walletError={walletError}
+            activeSenderAddress={activeSenderAddress}
+            activeSenderBalance={activeSenderBalance}
+          />
         </div>
       </section>
-
       <section className="zoneShell deployedZone">
         <div className="zoneHeader">
           <h2>Deployed Contracts</h2>
